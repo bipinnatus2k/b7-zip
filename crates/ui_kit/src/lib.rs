@@ -6,11 +6,15 @@
 
 pub mod button;
 pub mod checkbox;
+pub mod data;
+pub mod data_extra;
 pub mod icon_button;
 pub mod text_field;
 pub mod tokens;
 
 pub use button::{Button, ButtonStyle};
 pub use checkbox::Checkbox;
+pub use data::{Badge, Label, ProgressBar};
+pub use data_extra::{Breadcrumb, StatusBar};
 pub use icon_button::IconButton;
 pub use text_field::TextField;
