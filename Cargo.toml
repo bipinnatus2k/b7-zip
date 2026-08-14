@@ -11,6 +11,7 @@ members = [
     "crates/checksum",
     "crates/explorer",
     "crates/ffi",
+    "crates/fs",
     "crates/format_detector",
     "crates/fs_watcher",
     "crates/password",
@@ -104,6 +105,7 @@ sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
 temp = { path = "crates/temp" }
 vfs = { path = "crates/vfs" }
+fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }
 tracing = "0.1"
 util = { git = "https://github.com/zed-industries/zed" }
