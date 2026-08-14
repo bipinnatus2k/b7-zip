@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 app_constants.workspace = true
 clap.workspace = true
+ui_kit.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 crashes.workspace = true

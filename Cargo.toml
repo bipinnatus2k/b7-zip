@@ -24,6 +24,7 @@ members = [
     "crates/temp",
     "crates/thirdparties/gpui-tray",
     "crates/tray",
+    "crates/ui_kit",
     "crates/vfs",
 ]
 
@@ -108,6 +109,7 @@ sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
 task = { path = "crates/task" }
 temp = { path = "crates/temp" }
+ui_kit = { path = "crates/ui_kit" }
 vfs = { path = "crates/vfs" }
 fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }

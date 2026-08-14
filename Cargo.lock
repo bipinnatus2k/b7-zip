@@ -248,6 +248,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "ui_kit",
  "util",
  "uuid",
  "windows 0.57.0",
@@ -6889,6 +6890,13 @@ dependencies = [
  "memoffset",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ui_kit"
+version = "0.1.0"
+dependencies = [
+ "gpui",
 ]
 
 [[package]]
