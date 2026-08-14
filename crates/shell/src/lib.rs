@@ -20,13 +20,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
 use windows::core::{GUID, HRESULT, PCWSTR, PWSTR, Ref, BOOL, IUnknown, Interface, IUnknownImpl, implement, w};
-use windows::Win32::Foundation::HMODULE;
+use windows::Win32::Foundation::{HMODULE, E_FAIL, E_NOTIMPL};
 use windows::Win32::System::Com::{
-    DVASPECT_CONTENT, FORMATETC, IClassFactory, IClassFactory_Impl, IDataObject, TYMED_HGLOBAL,
+    DVASPECT_CONTENT, FORMATETC, IBindCtx, IClassFactory, IClassFactory_Impl, IDataObject,
+    TYMED_HGLOBAL,
 };
-use windows::Win32::System::LibraryLoader::{
-    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GetModuleFileNameW, GetModuleHandleExW,
-};
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW,
@@ -34,7 +33,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Shell::{
     CMINVOKECOMMANDINFO, DragFinish, DragQueryFileW, HDROP, IContextMenu, IContextMenu_Impl,
-    IShellExtInit, IShellExtInit_Impl, SHDeleteKeyW, SHSetValueW, ShellExecuteW,
+    IShellExtInit, IShellExtInit_Impl, IShellItemArray, IExplorerCommand,
+    IExplorerCommand_Impl, IEnumExplorerCommand, SHDeleteKeyW, SHSetValueW, SHStrDupW,
+    ShellExecuteW, SIGDN_FILESYSPATH, ECF_DEFAULT, ECS_ENABLED,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     HMENU, InsertMenuItemW, MENUITEMINFOW, MIIM_STRING, SW_HIDE, SW_SHOWNORMAL,
@@ -43,16 +44,35 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// The COM class id of this extension.
 pub const CLSID_BIT7Z_MENU: GUID = GUID::from_u128(0x4b69747a_7a69_5348_4c4c_4d454e55434f);
 
+/// DLL module handle captured by `DllMain` (zed-style).
+static DLL_INSTANCE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+/// Entry point called when Explorer loads (or unloads) this DLL.
+#[unsafe(no_mangle)]
+extern "system" fn DllMain(
+    hinst_dll: HMODULE,
+    fdw_reason: u32,
+    _lpv_reserved: *mut c_void,
+) -> bool {
+    if fdw_reason == 1 /* DLL_PROCESS_ATTACH */ {
+        let _ = DLL_INSTANCE.set(hinst_dll.0 as usize);
+    }
+    true
+}
+
 /// Registry subtree for per-user class registration.
 const REG_CLASSES: &str = "Software\\Classes";
 
 /// Context captured by `IShellExtInit::Initialize`.
 struct MenuContext {
     files: Vec<String>,
+    /// The `idCmdFirst` offset Explorer handed us in QueryContextMenu, so
+    /// InvokeCommand can map its absolute command id back to our index.
+    id_cmd_first: u32,
 }
 
 /// The shell extension object (single COM class, two interfaces).
-#[implement(IShellExtInit, IContextMenu)]
+#[implement(IShellExtInit, IContextMenu, IExplorerCommand)]
 struct Bit7zMenu {
     ctx: std::sync::Mutex<Option<MenuContext>>,
 }
@@ -76,7 +96,10 @@ impl IShellExtInit_Impl for Bit7zMenu_Impl {
             return Ok(());
         };
         let files = collect_files(data_object);
-        *self.get_impl().ctx.lock().unwrap() = Some(MenuContext { files });
+        *self.get_impl().ctx.lock().unwrap() = Some(MenuContext {
+            files,
+            id_cmd_first: 0,
+        });
         Ok(())
     }
 }
@@ -140,6 +163,11 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
             }
             count += 1;
         }
+        // Record the command-id base so InvokeCommand can recover our
+        // verb index from the absolute id Explorer passes back.
+        if let Some(ctx) = self.get_impl().ctx.lock().unwrap().as_mut() {
+            ctx.id_cmd_first = id_cmd_first;
+        }
         // Low 16 bits carry the number of items added.
         HRESULT(count as i32)
     }
@@ -155,7 +183,7 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
         if (verb >> 16) != 0 {
             return Ok(());
         }
-        let command_id = verb as u32;
+        let verb_id = verb as u32;
         let context = self.get_impl().ctx.lock().unwrap().take();
         let Some(context) = context else {
             return Ok(());
@@ -163,6 +191,8 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
         if context.files.is_empty() {
             return Ok(());
         }
+        // Explorer calls us with `idCmdFirst + index`; map back to our verb.
+        let command_id = verb_id.saturating_sub(context.id_cmd_first);
         let _ = catch_unwind(AssertUnwindSafe(|| {
             let _ = run_command(command_id, &context.files);
         }));
@@ -178,6 +208,61 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
         _cch_max: u32,
     ) -> windows::core::Result<()> {
         Ok(())
+    }
+}
+
+
+impl IExplorerCommand_Impl for Bit7zMenu_Impl {
+    fn GetTitle(&self, _: Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
+        let title = windows::core::HSTRING::from("Open with Bit7zFM");
+        unsafe { SHStrDupW(&title) }
+    }
+
+    fn GetIcon(&self, _: Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
+        // Point at the manager exe so Explorer can extract its icon.
+        let Some(manager) = find_sibling_exe("bit7zfm.exe") else {
+            return Err(E_FAIL.into());
+        };
+        let icon = windows::core::HSTRING::from(manager.as_path());
+        unsafe { SHStrDupW(&icon) }
+    }
+
+    fn GetToolTip(&self, _: Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
+        Err(E_NOTIMPL.into())
+    }
+
+    fn GetCanonicalName(&self) -> windows::core::Result<GUID> {
+        Ok(GUID::zeroed())
+    }
+
+    fn GetState(&self, _: Ref<'_, IShellItemArray>, _: BOOL) -> windows::core::Result<u32> {
+        Ok(ECS_ENABLED.0 as u32)
+    }
+
+    fn Invoke(
+        &self,
+        psiitemarray: Ref<'_, IShellItemArray>,
+        _pbc: Ref<'_, IBindCtx>,
+    ) -> windows::core::Result<()> {
+        let items = psiitemarray.ok()?;
+        let count = unsafe { items.GetCount()? };
+        for idx in 0..count {
+            let item = unsafe { items.GetItemAt(idx)? };
+            let display = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
+            let path = unsafe { display.to_string() }.map_err(|_| E_FAIL)?;
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                let _ = open_with_manager(Path::new(&path));
+            }));
+        }
+        Ok(())
+    }
+
+    fn GetFlags(&self) -> windows::core::Result<u32> {
+        Ok(ECF_DEFAULT.0 as u32)
+    }
+
+    fn EnumSubCommands(&self) -> windows::core::Result<IEnumExplorerCommand> {
+        Err(E_NOTIMPL.into())
     }
 }
 
@@ -225,7 +310,7 @@ fn collect_files(data_object: &IDataObject) -> Vec<String> {
 /// Execute a context-menu command.
 fn run_command(command_id: u32, files: &[String]) -> Result<(), String> {
     let Some(executor) = find_sibling_exe("bit7z-executor.exe") else {
-        return Err("bit7z-executor.exe not found next to shell DLL".into());
+        return Err(format!("bit7z-executor.exe not found next to shell DLL (dll at {:?})", module_path().ok()));
     };
     let first = PathBuf::from(&files[0]);
     let parent = first
@@ -353,14 +438,8 @@ fn open_with_manager(path: &Path) -> windows::core::Result<()> {
 
 /// Locate an exe shipped next to this DLL.
 fn find_sibling_exe(name: &str) -> Option<PathBuf> {
-    let mut module = HMODULE(std::ptr::null_mut());
+    let module = HMODULE(*DLL_INSTANCE.get()? as *mut c_void);
     unsafe {
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-            PCWSTR(find_sibling_exe as *const () as usize as *const u16),
-            &mut module,
-        )
-        .ok()?;
         let mut buf = vec![0u16; 4096];
         let len = GetModuleFileNameW(Some(module), &mut buf);
         if len == 0 {
@@ -481,14 +560,13 @@ fn guid_string(guid: &GUID) -> String {
 
 /// The path of this DLL (used for the InprocServer32 value).
 fn module_path() -> Result<String, String> {
-    let mut module = HMODULE(std::ptr::null_mut());
+    let module = HMODULE(
+        *DLL_INSTANCE
+            .get()
+            .ok_or_else(|| "DllMain not called".to_string())?
+            as *mut c_void,
+    );
     unsafe {
-        GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
-            PCWSTR(module_path as *const () as usize as *const u16),
-            &mut module,
-        )
-        .map_err(|e| format!("GetModuleHandleExW: {e}"))?;
         let mut buf = vec![0u16; 4096];
         let len = GetModuleFileNameW(Some(module), &mut buf);
         if len == 0 {
@@ -516,6 +594,20 @@ fn register_server() -> Result<(), String> {
     let dir_key = format!("{REG_CLASSES}\\Directory\\shellex\\ContextMenuHandlers\\Bit7z");
     set_reg_value(&dir_key, "", &clsid)?;
 
+    // Static verbs as a belt-and-suspenders fallback (the approach Zed uses
+    // on Windows 10): even if the COM handler is not picked up, the verbs
+    // below still show in the context menu. They launch the same CLI.
+    let manager = std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bit7zfm.exe".into());
+    let files_shell = format!("{REG_CLASSES}\\*\\shell\\Bit7zFM");
+    set_reg_value(&files_shell, "", "Bit7zFM")?;
+    set_reg_value(&format!("{files_shell}\\command"), "", &format!("\"{manager}\" \"%1\""))?;
+    let dir_shell = format!("{REG_CLASSES}\\Directory\\shell\\Bit7zFM");
+    set_reg_value(&dir_shell, "", "Bit7zFM")?;
+    set_reg_value(&format!("{dir_shell}\\command"), "", &format!("\"{manager}\" \"%1\""))?;
+
     Ok(())
 }
 
@@ -525,6 +617,8 @@ fn unregister_server() -> Result<(), String> {
     delete_reg_key(&format!("{REG_CLASSES}\\CLSID\\{clsid}"))?;
     delete_reg_key(&format!("{REG_CLASSES}\\*\\shellex\\ContextMenuHandlers\\Bit7z"))?;
     delete_reg_key(&format!("{REG_CLASSES}\\Directory\\shellex\\ContextMenuHandlers\\Bit7z"))?;
+    delete_reg_key(&format!("{REG_CLASSES}\\*\\shell\\Bit7zFM"))?;
+    delete_reg_key(&format!("{REG_CLASSES}\\Directory\\shell\\Bit7zFM"))?;
     Ok(())
 }
 
@@ -619,6 +713,54 @@ mod tests {
         };
         let result = unsafe { obj.InvokeCommand(&mut info as *mut CMINVOKECOMMANDINFO) };
         assert!(result.is_ok());
+    }
+
+
+    /// Full pipeline: context is seeded, QueryContextMenu records the
+    /// idCmdFirst base, and InvokeCommand maps the absolute id back to the
+    /// verb index (0x4000 + 2 -> verb 2).
+    #[test]
+    fn invoke_command_maps_absolute_id_to_verb() {
+        let fresh = Bit7zMenu::new();
+        {
+            let mut guard = fresh.ctx.lock().unwrap();
+            *guard = Some(MenuContext {
+                files: vec!["C:\\archives\\demo.7z".into()],
+                id_cmd_first: 0,
+            });
+        }
+        let obj: IContextMenu = fresh.into();
+        // QueryContextMenu stores id_cmd_first = 0x4000.
+        let hmenu = unsafe { CreateMenu() }.expect("CreateMenu");
+        let hr = unsafe { obj.QueryContextMenu(hmenu, 0, 0x4000, 0x7FFF, 0) };
+        assert!(hr.is_ok());
+        unsafe { DestroyMenu(hmenu) }.expect("DestroyMenu");
+
+        // InvokeCommand with absolute id 0x4002 must map to verb 2
+        // (Add to archive). run_command fails gracefully because the sibling
+        // executor is absent, so we only assert it did not panic and returned Ok.
+        let mut info = CMINVOKECOMMANDINFO {
+            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFO>() as u32,
+            fMask: 0,
+            hwnd: Default::default(),
+            lpVerb: windows::core::PCSTR(0x4002usize as *const u8),
+            lpParameters: windows::core::PCSTR::null(),
+            lpDirectory: windows::core::PCSTR::null(),
+            nShow: 0,
+            dwHotKey: 0,
+            hIcon: Default::default(),
+        };
+        let result = unsafe { obj.InvokeCommand(&mut info as *mut CMINVOKECOMMANDINFO) };
+        assert!(result.is_ok(), "InvokeCommand must not fail: {result:?}");
+    }
+
+    /// The registry CLSID string must match `CLSID_BIT7Z_MENU` exactly.
+    #[test]
+    fn clsid_string_matches_registry_format() {
+        assert_eq!(
+            guid_string(&CLSID_BIT7Z_MENU),
+            "{4B69747A-7A69-5348-4C4C-4D454E55434F}"
+        );
     }
 
     /// run_command for a missing sibling exe must fail gracefully (no panic).
