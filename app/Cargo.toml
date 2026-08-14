@@ -11,7 +11,12 @@ path = "src/main.rs"
 
 [dependencies]
 app_constants.workspace = true
+bit7z-explorer.workspace = true
+bit7z-rs.workspace = true
 clap.workspace = true
+password.workspace = true
+session.workspace = true
+task.workspace = true
 ui_kit.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true

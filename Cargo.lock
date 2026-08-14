@@ -235,6 +235,8 @@ dependencies = [
  "anyhow",
  "app_constants",
  "assets",
+ "bit7z-explorer",
+ "bit7z-rs",
  "clap",
  "collections",
  "crashes",
@@ -243,11 +245,14 @@ dependencies = [
  "gpui_platform",
  "log",
  "parking_lot",
+ "password",
  "path",
  "paths",
  "rayon",
  "serde",
  "serde_json",
+ "session",
+ "task",
  "ui_kit",
  "util",
  "uuid",
@@ -684,7 +689,10 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "password",
- "web-time",
+ "session",
+ "tempfile",
+ "ui_kit",
+ "vfs",
 ]
 
 [[package]]

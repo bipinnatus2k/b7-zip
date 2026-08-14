@@ -76,6 +76,7 @@ checksum = { path = "crates/checksum" }
 crashes = { path = "crates/crashes" }
 dirs = "6.0"
 explorer = { path = "crates/explorer" }
+bit7z-explorer = { path = "crates/explorer" }
 format_detector = { path = "crates/format_detector" }
 futures = "0.3"
 gpui = { git = "https://github.com/zed-industries/zed" }
@@ -92,6 +93,7 @@ mach2 = "0.5"
 minidumper = "0.9"
 parking_lot = "0.12.5"
 password = { path = "crates/password" }
+session = { path = "crates/session" }
 path = { git = "https://github.com/zed-industries/zed" }
 paths = { path = "crates/paths" }
 pciid-parser = "0.8.1"

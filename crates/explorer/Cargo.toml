@@ -10,6 +10,10 @@ workspace = true
 
 [dependencies]
 gpui.workspace = true
-web-time = "1.1.0"
 password.workspace = true
+session.workspace = true
+ui_kit.workspace = true
+vfs.workspace = true
 
+[dev-dependencies]
+tempfile = "3"
