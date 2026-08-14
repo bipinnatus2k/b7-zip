@@ -1,0 +1,9 @@
+[package]
+name = "bit7z-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bit7z-ffi.workspace = true
+password.workspace = true

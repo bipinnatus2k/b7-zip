@@ -1,0 +1,13 @@
+[package]
+name = "vfs"
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+jiff.workspace = true
+thiserror = { version = "2.0.19" }
+
+[lints]
+workspace = true

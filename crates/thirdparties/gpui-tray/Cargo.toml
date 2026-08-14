@@ -1,0 +1,42 @@
+[package]
+name = "gpui-tray"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+gpui_platform = { workspace = true, features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0"
+objc2-foundation = { version = "0", features = ["NSData", "NSGeometry", "NSString"] }
+objc2-app-kit = { version = "0", features = [
+  "NSApplication",
+  "NSButton",
+  "NSCell",
+  "NSControl",
+  "NSEvent",
+  "NSImage",
+  "NSMenu",
+  "NSMenuItem",
+  "NSResponder",
+  "NSStatusBar",
+  "NSStatusBarButton",
+  "NSStatusItem",
+  "NSView",
+] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+serde.workspace = true
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"] }

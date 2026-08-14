@@ -1,0 +1,13 @@
+[package]
+name = "password"
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+secrecy = { version = "0.10.3", features = ["serde"] }
+
+
+[lints]
+workspace = true

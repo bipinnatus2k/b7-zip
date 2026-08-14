@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target
+**/target
+
+# IDE
+.idea
+*.iml
+.vscode
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local job/temp files
+*.job.json

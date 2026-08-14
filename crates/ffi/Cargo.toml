@@ -1,0 +1,15 @@
+[package]
+name = "bit7z-ffi"
+version = "0.1.2"
+edition.workspace = true
+license.workspace = true
+
+build = "build.rs"
+
+[dependencies]
+autocxx = "0.30"
+cxx = "1.0"
+
+[build-dependencies]
+autocxx-build = "0.30"
+miette = { version = "5", features = ["fancy"] }

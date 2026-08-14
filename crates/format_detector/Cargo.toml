@@ -1,0 +1,18 @@
+[package]
+name = "format_detector"
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+autobins = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

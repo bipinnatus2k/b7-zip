@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "recomp": {
+      "source": "brickhu/skills",
+      "sourceType": "github",
+      "skillPath": "recomp/SKILL.md",
+      "computedHash": "2c2f5f7327d1bc2dfb82b305e255e5a5f177d2dd56f926c49f361a100dfd2c1f"
+    }
+  }
+}
