@@ -201,6 +201,27 @@ impl ArchiveWriter {
         }
     }
 
+    /// Add a single file at `fs_path` into the archive under `archive_path`.",
+    pub fn add_item_with_path(&self, fs_path: &str, archive_path: &str) -> Result<(), String> {
+        let c_fs = std::ffi::CString::new(fs_path).map_err(|e| format!("{}", e))?;
+        let c_arch = std::ffi::CString::new(archive_path).map_err(|e| format!("{}", e))?;
+        let fs_ptr = c_fs.as_ptr();
+        let arch_ptr = c_arch.as_ptr();
+        let ret = unsafe {
+            bit7z_writer_add_items(
+                self.raw.as_ptr(),
+                &fs_ptr,
+                &arch_ptr,
+                1,
+            )
+        };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err("add_item_with_path failed".into())
+        }
+    }
+
     pub fn add_directory(&self, dir: &str) -> Result<(), String> {
         let c_dir = std::ffi::CString::new(dir).map_err(|e| format!("{}", e))?;
         let ret = unsafe { bit7z_ffi::bit7z_writer_add_dir(self.raw.as_ptr(), c_dir.as_ptr()) };

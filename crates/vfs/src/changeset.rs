@@ -17,6 +17,8 @@ pub struct AddOp {
 pub struct ModifyOp {
     /// Index of the original archive entry.
     pub archive_index: u32,
+    /// Original path of the entry inside the archive.
+    pub archive_path: String,
     /// Absolute path of the replacement file on disk.
     pub fs_path: PathBuf,
 }

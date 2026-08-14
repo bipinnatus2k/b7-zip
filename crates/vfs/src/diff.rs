@@ -40,11 +40,16 @@ pub fn build_changeset(
                 if let Some(node) = working.node(*node_id)
                     && let Some(archive_index) = base.node(*node_id).and_then(|n| n.archive_index())
                 {
+                    let archive_path = base
+                        .path_of(*node_id)
+                        .unwrap_or_else(|| node.name.clone());
                     let fs_path = node
                         .fs_path()
                         .map(ToOwned::to_owned)
                         .unwrap_or_default();
-                    changeset.modifications.push(ModifyOp { archive_index, fs_path });
+                    changeset
+                        .modifications
+                        .push(ModifyOp { archive_index, archive_path, fs_path });
                 }
             }
             DirtyState::Renamed => {

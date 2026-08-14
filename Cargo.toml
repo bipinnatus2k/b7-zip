@@ -5,6 +5,7 @@ members = [
     "app",
     "cli",
     "crates/app_constants", "crates/app_env",
+    "crates/archive_vfs",
     "crates/assets",
     "crates/bit7z",
     "crates/checksum",
@@ -44,6 +45,7 @@ ashpd = { version = "0.13", default-features = false, features = [
     "trash",
 ] }
 app_constants = { path = "crates/app_constants" }
+archive_vfs = { path = "crates/archive_vfs" }
 assets = { path = "crates/assets" }
 async-channel = "2.5.0"
 async-compat = "0.2.1"
@@ -100,6 +102,9 @@ strum = "0.27"
 syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
+temp = { path = "crates/temp" }
+vfs = { path = "crates/vfs" }
+fs_watcher = { path = "crates/fs_watcher" }
 tracing = "0.1"
 util = { git = "https://github.com/zed-industries/zed" }
 zstd = "0.11"

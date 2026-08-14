@@ -277,6 +277,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "archive_vfs"
+version = "0.1.0"
+dependencies = [
+ "bit7z-rs",
+ "vfs",
+]
+
+[[package]]
 name = "arg_enum_proc_macro"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -690,7 +698,10 @@ name = "bit7z-rs"
 version = "0.1.0"
 dependencies = [
  "bit7z-ffi",
+ "jiff",
  "password",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
