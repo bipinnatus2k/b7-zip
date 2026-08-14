@@ -65,7 +65,18 @@ fn run_job(
                 overwrite: (*overwrite).into(),
                 cancel: None,
             };
-            engine.extract(archive, items, target, password, &options)
+            // An empty item list means "extract everything"; resolve it to the
+            // full index set (an empty slice would be UB at the FFI boundary).
+            let indices: Vec<u32> = if items.is_empty() {
+                engine
+                    .list(archive, password)?
+                    .iter()
+                    .map(|entry| entry.index)
+                    .collect()
+            } else {
+                items.clone()
+            };
+            engine.extract(archive, &indices, target, password, &options)
         }
         JobSpec::Compress {
             inputs,

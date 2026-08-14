@@ -60,6 +60,7 @@ impl From<serde_json::Error> for JobFileError {
 
 /// Overwrite behavior for extraction.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum OverwriteSpec {
     #[default]
     Ask,
@@ -70,6 +71,7 @@ pub enum OverwriteSpec {
 
 /// Archive format for compression jobs.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum FormatSpec {
     #[default]
     SevenZip,
@@ -97,6 +99,7 @@ impl From<FormatSpec> for bit7z_rs::WriterFormat {
 
 /// Compression level for compression jobs.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum LevelSpec {
     None,
     Fastest,

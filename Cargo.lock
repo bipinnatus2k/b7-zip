@@ -1946,6 +1946,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "executor"
+version = "0.1.0"
+dependencies = [
+ "bit7z-rs",
+ "clap",
+ "gpui",
+ "gpui_platform",
+ "password",
+ "task",
+ "temp",
+ "ui_kit",
+]
+
+[[package]]
 name = "exr"
 version = "1.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
