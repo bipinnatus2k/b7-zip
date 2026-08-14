@@ -16,3 +16,6 @@ Thumbs.db
 
 # Local job/temp files
 *.job.json
+
+# DSH generated
+skills-lock.json

@@ -19,7 +19,6 @@ members = [
     "crates/system_specs",
     "crates/temp",
     "crates/thirdparties/gpui-tray",
-    "crates/thirdparties/scap",
     "crates/tray",
     "crates/vfs",
 ]
