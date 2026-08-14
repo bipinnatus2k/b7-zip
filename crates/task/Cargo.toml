@@ -1,0 +1,24 @@
+[package]
+name = "task"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+bit7z-rs.workspace = true
+checksum.workspace = true
+password.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2.0.19"
+vfs.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1069,7 +1069,12 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "cli"
 version = "0.1.0"
 dependencies = [
+ "bit7z-rs",
+ "checksum",
  "clap",
+ "format_detector",
+ "password",
+ "task",
 ]
 
 [[package]]
@@ -6449,6 +6454,20 @@ name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
+name = "task"
+version = "0.1.0"
+dependencies = [
+ "bit7z-rs",
+ "checksum",
+ "password",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "vfs",
+]
 
 [[package]]
 name = "tauri-winrt-notification"

@@ -25,7 +25,7 @@ pub mod queue;
 pub mod tree;
 
 pub use attr::{AttrMap, AttrName, AttrValue};
-pub use changeset::Changeset;
+pub use changeset::{AddOp, Changeset, DeleteOp, ModifyOp, RenameOp};
 pub use node::{NodeId, VfsNode, next_node_id};
 pub use overlay::{DirtyState, Overlay, OverlayError};
 pub use queue::{EditOperation, EditQueue, EditTransaction};

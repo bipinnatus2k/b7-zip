@@ -5,8 +5,17 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[[bin]]
+name = "bit7z"
+path = "src/main.rs"
+
 [dependencies]
+bit7z-rs.workspace = true
+checksum.workspace = true
 clap.workspace = true
+format_detector.workspace = true
+password.workspace = true
+task.workspace = true
 
 [lints]
 workspace = true

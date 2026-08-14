@@ -7,10 +7,10 @@
 use std::io::{self, Read};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Checksum algorithms supported by this component.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ChecksumAlgorithm {
     Crc32,
     Crc64,
