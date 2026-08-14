@@ -5883,6 +5883,18 @@ dependencies = [
 [[package]]
 name = "session"
 version = "0.1.0"
+dependencies = [
+ "archive_vfs",
+ "bit7z-rs",
+ "fs",
+ "fs_watcher",
+ "password",
+ "task",
+ "temp",
+ "tempfile",
+ "thiserror 2.0.19",
+ "vfs",
+]
 
 [[package]]
 name = "settings"
