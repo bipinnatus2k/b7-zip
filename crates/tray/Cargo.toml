@@ -6,7 +6,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-gpui-tray.workspace = true
 gpui.workspace = true
 
 [lints]

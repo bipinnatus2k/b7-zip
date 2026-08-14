@@ -61,7 +61,7 @@ unsafe extern "C" {
     // fn bit7z_writer_set_password(w: *mut std::ffi::c_void, password: *const std::ffi::c_char);
     // fn bit7z_writer_set_update_mode(w: *mut std::ffi::c_void, mode: i32);
     // fn bit7z_writer_add_file(w: *mut std::ffi::c_void, path: *const std::ffi::c_char) -> i32;
-    fn bit7z_writer_add_files(
+    pub fn bit7z_writer_add_files(
         w: *mut std::ffi::c_void,
         paths: *const *const std::ffi::c_char,
         count: u32,

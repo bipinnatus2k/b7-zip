@@ -40,7 +40,7 @@ use windows_sys::Win32::{
         },
     },
 };
-use windows_sys::core::BOOL;
+use windows_sys::Win32::Foundation::BOOL;
 
 #[derive(Clone, Default)]
 pub struct TrayHandle;

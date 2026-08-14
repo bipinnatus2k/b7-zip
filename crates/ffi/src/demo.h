@@ -37,22 +37,22 @@ using time_type = bit7z::time_type;
 using ArchiveError = bit7z::BitError;
 
 // ===== Test function =====
-inline int multiply(int a, int b) { return a * b; }
+extern "C" inline int multiply(int a, int b) { return a * b; }
 
 // ===== Library wrappers =====
-inline void* bit7z_create_library(const char* dll_path) {
+extern "C" inline void* bit7z_create_library(const char* dll_path) {
     try {
         auto* lib = new bit7z::Bit7zLibrary(dll_path ? std::string(dll_path) : "");
         return static_cast<void*>(lib);
     } catch (...) { return nullptr; }
 }
-inline void bit7z_destroy_library(void* lib) {
+extern "C" inline void bit7z_destroy_library(void* lib) {
     delete static_cast<bit7z::Bit7zLibrary*>(lib);
 }
 
 // ===== Reader wrappers =====
 
-inline void* bit7z_reader_open(void* lib_ptr, const char* path, const char* password) {
+extern "C" inline void* bit7z_reader_open(void* lib_ptr, const char* path, const char* password) {
     try {
         auto& lib = *static_cast<bit7z::Bit7zLibrary*>(lib_ptr);
         return new bit7z::BitArchiveReader(lib,
@@ -61,51 +61,51 @@ inline void* bit7z_reader_open(void* lib_ptr, const char* path, const char* pass
             bit7z::tstring(password ? password : ""));
     } catch (...) { return nullptr; }
 }
-inline void bit7z_reader_close(void* reader_ptr) {
+extern "C" inline void bit7z_reader_close(void* reader_ptr) {
     delete static_cast<bit7z::BitArchiveReader*>(reader_ptr);
 }
-inline uint32_t bit7z_reader_item_count(void* reader_ptr) {
+extern "C" inline uint32_t bit7z_reader_item_count(void* reader_ptr) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->itemsCount();
     } catch (...) { return 0; }
 }
 
 // ===== Item accessor wrappers (thread_local buffers, thread-safe) =====
-inline const char* bit7z_item_path(void* reader_ptr, uint32_t index) {
+extern "C" inline const char* bit7z_item_path(void* reader_ptr, uint32_t index) {
     try {
         thread_local std::string s;
         s = static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].path();
         return s.c_str();
     } catch (...) { return ""; }
 }
-inline const char* bit7z_item_name(void* reader_ptr, uint32_t index) {
+extern "C" inline const char* bit7z_item_name(void* reader_ptr, uint32_t index) {
     try {
         thread_local std::string s;
         s = static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].name();
         return s.c_str();
     } catch (...) { return ""; }
 }
-inline uint64_t bit7z_item_size(void* reader_ptr, uint32_t index) {
+extern "C" inline uint64_t bit7z_item_size(void* reader_ptr, uint32_t index) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].size();
     } catch (...) { return 0; }
 }
-inline uint64_t bit7z_item_packed_size(void* reader_ptr, uint32_t index) {
+extern "C" inline uint64_t bit7z_item_packed_size(void* reader_ptr, uint32_t index) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].packSize();
     } catch (...) { return 0; }
 }
-inline int32_t bit7z_item_is_dir(void* reader_ptr, uint32_t index) {
+extern "C" inline int32_t bit7z_item_is_dir(void* reader_ptr, uint32_t index) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].isDir() ? 1 : 0;
     } catch (...) { return 0; }
 }
-inline int32_t bit7z_item_is_encrypted(void* reader_ptr, uint32_t index) {
+extern "C" inline int32_t bit7z_item_is_encrypted(void* reader_ptr, uint32_t index) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].isEncrypted() ? 1 : 0;
     } catch (...) { return 0; }
 }
-inline uint32_t bit7z_item_crc(void* reader_ptr, uint32_t index) {
+extern "C" inline uint32_t bit7z_item_crc(void* reader_ptr, uint32_t index) {
     try {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].crc();
     } catch (...) { return 0; }
@@ -124,7 +124,7 @@ inline int32_t tstring_to_utf8(const bit7z::tstring& src, char* out_buf, uint32_
 
 // ===== Item property wrappers (direct BitArchiveItem pointer) =====
 
-inline uint64_t bit7z_item_mtime(void* ptr) {
+extern "C" inline uint64_t bit7z_item_mtime(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto tp = item->lastWriteTime();
@@ -132,7 +132,7 @@ inline uint64_t bit7z_item_mtime(void* ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint64_t bit7z_item_ctime(void* ptr) {
+extern "C" inline uint64_t bit7z_item_ctime(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto tp = item->creationTime();
@@ -140,7 +140,7 @@ inline uint64_t bit7z_item_ctime(void* ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint64_t bit7z_item_atime(void* ptr) {
+extern "C" inline uint64_t bit7z_item_atime(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto tp = item->lastAccessTime();
@@ -148,21 +148,21 @@ inline uint64_t bit7z_item_atime(void* ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint32_t bit7z_item_attributes(void* ptr) {
+extern "C" inline uint32_t bit7z_item_attributes(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         return item->attributes();
     } catch (...) { return 0; }
 }
 
-inline uint8_t bit7z_item_host_os(void* ptr) {
+extern "C" inline uint8_t bit7z_item_host_os(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         return item->itemProperty(bit7z::BitProperty::HostOS).getUInt8();
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_item_compression_method(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_compression_method(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto prop = item->itemProperty(bit7z::BitProperty::Method).getString();
@@ -170,7 +170,7 @@ inline int32_t bit7z_item_compression_method(void* ptr, char* out_buf, uint32_t 
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-inline int32_t bit7z_item_comment(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_comment(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto prop = item->itemProperty(bit7z::BitProperty::Comment).getString();
@@ -178,7 +178,7 @@ inline int32_t bit7z_item_comment(void* ptr, char* out_buf, uint32_t buf_size) {
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-inline int32_t bit7z_item_user(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_user(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto prop = item->itemProperty(bit7z::BitProperty::User).getString();
@@ -186,7 +186,7 @@ inline int32_t bit7z_item_user(void* ptr, char* out_buf, uint32_t buf_size) {
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-inline int32_t bit7z_item_group(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_group(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto prop = item->itemProperty(bit7z::BitProperty::Group).getString();
@@ -194,21 +194,21 @@ inline int32_t bit7z_item_group(void* ptr, char* out_buf, uint32_t buf_size) {
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-inline int32_t bit7z_item_is_symlink(void* ptr) {
+extern "C" inline int32_t bit7z_item_is_symlink(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         return item->isSymLink() ? 1 : 0;
     } catch (...) { return 0; }
 }
 
-inline uint32_t bit7z_item_posix_attrib(void* ptr) {
+extern "C" inline uint32_t bit7z_item_posix_attrib(void* ptr) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         return item->itemProperty(bit7z::BitProperty::PosixAttrib).getUInt32();
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_item_extension(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_extension(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto ext = item->extension();
@@ -217,7 +217,7 @@ inline int32_t bit7z_item_extension(void* ptr, char* out_buf, uint32_t buf_size)
 }
 
 
-inline int32_t bit7z_item_hardlink(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_hardlink(void* ptr, char* out_buf, uint32_t buf_size) {
     try {
         auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
         auto prop = item->itemProperty(ArchiveProperties::HardLink).getString();
@@ -226,7 +226,7 @@ inline int32_t bit7z_item_hardlink(void* ptr, char* out_buf, uint32_t buf_size) 
 }
 
 // Retrieve raw BitArchiveItem* from reader + index (for property wrappers above)
-inline void* bit7z_item_from_reader(void* reader_ptr, uint32_t index) {
+extern "C" inline void* bit7z_item_from_reader(void* reader_ptr, uint32_t index) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         return (void*)&reader.items()[index];
@@ -234,7 +234,7 @@ inline void* bit7z_item_from_reader(void* reader_ptr, uint32_t index) {
 }
 
 // ===== Extract wrappers =====
-inline int32_t bit7z_reader_extract_to(void* reader_ptr, const uint32_t* indices, uint32_t count, const char* dest_path) {
+extern "C" inline int32_t bit7z_reader_extract_to(void* reader_ptr, const uint32_t* indices, uint32_t count, const char* dest_path) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         std::vector<uint32_t> idxs(indices, indices + count);
@@ -243,7 +243,7 @@ inline int32_t bit7z_reader_extract_to(void* reader_ptr, const uint32_t* indices
     } catch (...) { return -1; }
 }
 
-inline int32_t bit7z_reader_extract_item_to_buffer(void* reader_ptr, uint32_t index, void** out_data, int64_t* out_size) {
+extern "C" inline int32_t bit7z_reader_extract_item_to_buffer(void* reader_ptr, uint32_t index, void** out_data, int64_t* out_size) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         bit7z::buffer_t buf;
@@ -256,7 +256,7 @@ inline int32_t bit7z_reader_extract_item_to_buffer(void* reader_ptr, uint32_t in
         return 0;
     } catch (...) { *out_data = nullptr; *out_size = 0; return -1; }
 }
-inline void bit7z_reader_free_buffer(void* data) {
+extern "C" inline void bit7z_reader_free_buffer(void* data) {
     delete[] static_cast<unsigned char*>(data);
 }
 
@@ -276,7 +276,7 @@ inline int64_t bit7z_reader_extract_item_size(void* reader_ptr, uint32_t index) 
         return static_cast<int64_t>(buf.size());
     } catch (...) { return -1; }
 }
-inline void* bit7z_reader_extract_item_data(void* reader_ptr, uint32_t index) {
+extern "C" inline void* bit7z_reader_extract_item_data(void* reader_ptr, uint32_t index) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         bit7z::buffer_t buf;
@@ -298,7 +298,7 @@ struct TestResult {
     std::vector<std::string> failed_errors;
 };
 
-inline void* bit7z_reader_test(void* reader_ptr) {
+extern "C" inline void* bit7z_reader_test(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         reader.test();  // throws BitException if any item fails
@@ -321,25 +321,25 @@ inline void* bit7z_reader_test(void* reader_ptr) {
     }
 }
 
-inline uint32_t bit7z_test_result_total(void* result_ptr) {
+extern "C" inline uint32_t bit7z_test_result_total(void* result_ptr) {
     return static_cast<TestResult*>(result_ptr)->total;
 }
 
-inline uint32_t bit7z_test_result_failed_count(void* result_ptr) {
+extern "C" inline uint32_t bit7z_test_result_failed_count(void* result_ptr) {
     return static_cast<TestResult*>(result_ptr)->failed_count;
 }
 
-inline int32_t bit7z_test_result_all_ok(void* result_ptr) {
+extern "C" inline int32_t bit7z_test_result_all_ok(void* result_ptr) {
     return static_cast<TestResult*>(result_ptr)->all_ok ? 1 : 0;
 }
 
-inline const char* bit7z_test_result_error(void* result_ptr) {
+extern "C" inline const char* bit7z_test_result_error(void* result_ptr) {
     auto* r = static_cast<TestResult*>(result_ptr);
     if (r->failed_errors.empty()) return "";
     return r->failed_errors[0].c_str();
 }
 
-inline void bit7z_test_result_free(void* result_ptr) {
+extern "C" inline void bit7z_test_result_free(void* result_ptr) {
     delete static_cast<TestResult*>(result_ptr);
 }
 
@@ -349,7 +349,7 @@ static inline const bit7z::BitInFormat& detect_format_from_path(const char*) {
     return bit7z::BitFormat::Auto;
 }
 
-inline int32_t bit7z_is_header_encrypted(void* lib_ptr, const char* path) {
+extern "C" inline int32_t bit7z_is_header_encrypted(void* lib_ptr, const char* path) {
     try {
         auto& lib = *static_cast<bit7z::Bit7zLibrary*>(lib_ptr);
         const auto& fmt = detect_format_from_path(path);
@@ -357,7 +357,7 @@ inline int32_t bit7z_is_header_encrypted(void* lib_ptr, const char* path) {
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_is_encrypted(void* lib_ptr, const char* path) {
+extern "C" inline int32_t bit7z_is_encrypted(void* lib_ptr, const char* path) {
     try {
         auto& lib = *static_cast<bit7z::Bit7zLibrary*>(lib_ptr);
         const auto& fmt = detect_format_from_path(path);
@@ -372,7 +372,7 @@ extern "C" inline int32_t bit7z_reader_has_encrypted_items(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_reader_is_solid(void* reader_ptr) {
+extern "C" inline int32_t bit7z_reader_is_solid(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::Solid);
@@ -380,7 +380,7 @@ inline int32_t bit7z_reader_is_solid(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_reader_is_multi_volume(void* reader_ptr) {
+extern "C" inline int32_t bit7z_reader_is_multi_volume(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::IsVolume);
@@ -388,7 +388,7 @@ inline int32_t bit7z_reader_is_multi_volume(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint32_t bit7z_reader_volumes_count(void* reader_ptr) {
+extern "C" inline uint32_t bit7z_reader_volumes_count(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::NumVolumes);
@@ -399,7 +399,7 @@ inline uint32_t bit7z_reader_volumes_count(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint64_t bit7z_reader_headers_size(void* reader_ptr) {
+extern "C" inline uint64_t bit7z_reader_headers_size(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::HeadersSize);
@@ -408,7 +408,7 @@ inline uint64_t bit7z_reader_headers_size(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline int32_t bit7z_reader_has_comment(void* reader_ptr) {
+extern "C" inline int32_t bit7z_reader_has_comment(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::Commented);
@@ -416,7 +416,7 @@ inline int32_t bit7z_reader_has_comment(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
-inline uint64_t bit7z_reader_dictionary_size(void* reader_ptr) {
+extern "C" inline uint64_t bit7z_reader_dictionary_size(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto prop = reader.archiveProperty(ArchiveProperties::DictionarySize);
@@ -435,7 +435,7 @@ struct ItemList {
     std::string prefix;
 };
 
-inline void* bit7z_reader_list_directory(void* reader_ptr, const char* path) {
+extern "C" inline void* bit7z_reader_list_directory(void* reader_ptr, const char* path) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         std::string prefix = path ? path : "";
@@ -479,74 +479,74 @@ inline void* bit7z_reader_list_directory(void* reader_ptr, const char* path) {
     } catch (...) { return nullptr; }
 }
 
-inline uint32_t bit7z_item_list_count(void* list_ptr) {
+extern "C" inline uint32_t bit7z_item_list_count(void* list_ptr) {
     auto* list = static_cast<ItemList*>(list_ptr);
     return static_cast<uint32_t>(list->items.size() + list->dirs.size());
 }
 
-inline uint32_t bit7z_item_list_index(void* list_ptr, uint32_t index) {
+extern "C" inline uint32_t bit7z_item_list_index(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].index();
     return list->dir_indices[index - list->items.size()];
 }
 
-inline const char* bit7z_item_list_path(void* list_ptr, uint32_t index) {
+extern "C" inline const char* bit7z_item_list_path(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->paths[index].c_str();
     return list->dirs[index - list->items.size()].c_str();
 }
 
-inline uint64_t bit7z_item_list_size(void* list_ptr, uint32_t index) {
+extern "C" inline uint64_t bit7z_item_list_size(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].size();
     return 0;
 }
 
-inline uint64_t bit7z_item_list_packed_size(void* list_ptr, uint32_t index) {
+extern "C" inline uint64_t bit7z_item_list_packed_size(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].packSize();
     return 0;
 }
 
-inline int32_t bit7z_item_list_is_dir(void* list_ptr, uint32_t index) {
+extern "C" inline int32_t bit7z_item_list_is_dir(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].isDir() ? 1 : 0;
     return 1;
 }
 
-inline int32_t bit7z_item_list_is_encrypted(void* list_ptr, uint32_t index) {
+extern "C" inline int32_t bit7z_item_list_is_encrypted(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].isEncrypted() ? 1 : 0;
     return 0;
 }
 
-inline uint32_t bit7z_item_list_crc(void* list_ptr, uint32_t index) {
+extern "C" inline uint32_t bit7z_item_list_crc(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return list->items[index].crc();
     return 0;
 }
 
-inline void* bit7z_item_list_item(void* list_ptr, uint32_t index) {
+extern "C" inline void* bit7z_item_list_item(void* list_ptr, uint32_t index) {
     auto* list = static_cast<ItemList*>(list_ptr);
     if (index < list->items.size())
         return static_cast<void*>(&list->items[index]);
     return nullptr;
 }
 
-inline void bit7z_item_list_free(void* list_ptr) {
+extern "C" inline void bit7z_item_list_free(void* list_ptr) {
     delete static_cast<ItemList*>(list_ptr);
 }
 
 // ===== Batch items (all archive items returned as a single ItemList) =====
 
-inline void* bit7z_reader_items(void* reader_ptr) {
+extern "C" inline void* bit7z_reader_items(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto all_items = reader.items();

@@ -1,58 +1,49 @@
+//! A minimal, source-agnostic virtual file system core.
+//!
+//! This crate defines only the building blocks:
+//!
+//! * [`VfsNode`]s — identity, parent, name, `is_directory`, plus a free-form
+//!   attribute map ([`attr`]) with *conventional* names shared across VFS
+//!   implementations.
+//! * [`Tree`] — the tree structure (insert/remove/rename, path resolution).
+//! * [`Overlay`] — layering a working tree over a base tree, tracking
+//!   dirty nodes; [`diff::build_changeset`] turns that into a [`Changeset`]
+//!   ready for a task runner to commit.
+//! * [`queue`] — an undo/redo transaction queue for in-memory edits.
+//!
+//! There is no notion of "layers" or "kinds" here: any component (filesystem
+//! driver, archive driver, network driver, ...) builds [`Tree`]s of
+//! [`VfsNode`]s and overlays them. The crate has no dependencies on engines,
+//! archives, or the GUI.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use jiff::__jcore::civil::DateTime;
+pub mod attr;
+pub mod changeset;
+pub mod diff;
+pub mod node;
+pub mod overlay;
+pub mod queue;
+pub mod tree;
 
-static NEXT_VFS_ID: AtomicU64 = AtomicU64::new(1);
+pub use attr::{AttrMap, AttrName, AttrValue};
+pub use changeset::Changeset;
+pub use node::{NodeId, VfsNode, next_node_id};
+pub use overlay::{DirtyState, Overlay, OverlayError};
+pub use queue::{EditOperation, EditQueue, EditTransaction};
+pub use tree::Tree;
 
-pub fn next_vfs_id() -> VfsNodeId {
-    VfsNodeId(NEXT_VFS_ID.fetch_add(1, Ordering::Relaxed))
+/// Backwards-compatible alias used by the edit queue and existing code.
+pub type VfsNodeId = NodeId;
+
+/// Backwards-compatible alias for [`next_node_id`].
+pub fn next_vfs_id() -> NodeId {
+    next_node_id()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VfsNodeId(u64);
-
-impl VfsNodeId {
-    pub fn as_u64(&self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct VfsNode {
-    pub id: VfsNodeId,
-    pub parent: Option<VfsNodeId>,
-    pub name: String,
-    pub is_directory: bool,
-    pub original_index: Option<u32>,
-    pub fs_path: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct VfsMetadata {
-    pub size: u64,
-    pub compressed_size: u64,
-    pub modified: Option<DateTime>,
-    pub created: Option<DateTime>,
-    pub accessed: Option<DateTime>,
-    pub crc: Option<u32>,
-    pub is_encrypted: bool,
-    pub is_symlink: bool,
-    pub attributes: Option<u32>,
-    pub posix_attrib: Option<u32>,
-    pub host_os: Option<u8>,
-    pub compression_method: Option<String>,
-    pub comment: Option<String>,
-    pub user: Option<String>,
-    pub group: Option<String>,
-    pub extension: Option<String>,
-    pub hardlink: Option<String>,
-}
-
+/// Errors produced by tree operations.
 #[derive(Debug, thiserror::Error)]
 pub enum VfsError {
     #[error("Node not found: {0:?}")]
-    NodeNotFound(VfsNodeId),
+    NodeNotFound(NodeId),
     #[error("Path not found: {0}")]
     PathNotFound(String),
     #[error("Not a directory: {0}")]
@@ -64,11 +55,3 @@ pub enum VfsError {
     #[error("Internal error: {0}")]
     Internal(String),
 }
-
-pub mod overlay;
-pub mod queue;
-pub mod tree;
-
-pub use overlay::OverlayVfs;
-pub use queue::{EditOperation, EditQueue, EditTransaction};
-pub use tree::{DirtyEntry, DirtyTree, DirtyType, Tree};

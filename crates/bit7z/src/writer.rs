@@ -1,6 +1,5 @@
 
-use bit7z_ffi::{bit7z_writer_add_files, bit7z_writer_add_items, bit7z_writer_close, bit7z_writer_compress_to_cb, bit7z_writer_create, bit7z_writer_open, bit7z_writer_set_threads, c_int};
-use bit7z_ffi::bit7z::{to_tstring, tstring};
+use bit7z_ffi::{bit7z_writer_add_files, bit7z_writer_add_items, bit7z_writer_close, bit7z_writer_compress_to_cb, bit7z_writer_create, bit7z_writer_open, bit7z_writer_set_threads};
 use password::Password;
 use crate::handle::BitArchiveHandle;
 use crate::library::Bit7zLibrary;
@@ -36,6 +35,7 @@ pub enum WriterCompressionLevel {
 
 /// Update mode for modifying existing archives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
 pub enum UpdateMode {
     None = 0,
     Append = 1,
@@ -68,6 +68,36 @@ pub enum EncryptionScope {
 pub enum FilterPolicy {
     Include = 0,
     Exclude = 1,
+}
+
+impl From<WriterFormat> for i32 {
+    fn from(value: WriterFormat) -> i32 {
+        value as i32
+    }
+}
+
+impl From<WriterCompressionLevel> for i32 {
+    fn from(value: WriterCompressionLevel) -> i32 {
+        value as i32
+    }
+}
+
+impl From<UpdateMode> for i32 {
+    fn from(value: UpdateMode) -> i32 {
+        value as i32
+    }
+}
+
+impl From<WriterCompressionMethod> for i32 {
+    fn from(value: WriterCompressionMethod) -> i32 {
+        value as i32
+    }
+}
+
+impl From<FilterPolicy> for i32 {
+    fn from(value: FilterPolicy) -> i32 {
+        value as i32
+    }
 }
 
 pub struct ArchiveWriter {
@@ -252,7 +282,7 @@ impl ArchiveWriter {
             bit7z_ffi::bit7z_writer_set_password_ex(
                 self.raw.as_ptr(),
                 c_pw.as_ptr(),
-                c_int(encrypt_header as i32),
+                encrypt_header as i32,
             );
         }
     }
@@ -261,9 +291,9 @@ impl ArchiveWriter {
         unsafe {
             bit7z_ffi::bit7z_writer_set_store_timestamps(
                 self.raw.as_ptr(),
-                c_int(modified as i32),
-                c_int(created as i32),
-                c_int(accessed as i32),
+                modified as i32,
+                created as i32,
+                accessed as i32,
             );
         }
     }
@@ -282,8 +312,8 @@ impl ArchiveWriter {
                 self.raw.as_ptr(),
                 c_dir.as_ptr(),
                 c_filter.as_ptr(),
-                c_int(policy as i32),
-                c_int(recursive as i32),
+                policy as i32,
+                recursive as i32,
             )
         };
         if ret == 0 {
@@ -302,13 +332,13 @@ impl ArchiveWriter {
             .iter()
             .filter_map(|(_, n)| std::ffi::CString::new(*n).ok())
             .collect();
-        let path_ptrs: bit7z_ffi::cxx::CxxVector<tstring> = c_paths.iter().map(|s| to_tstring(s.)).collect();
-        let name_ptrs: Vec<*const tstring> = c_names.iter().map(|s| s.as_ptr()).collect();
+        let path_ptrs: Vec<*const std::ffi::c_char> = c_paths.iter().map(|s| s.as_ptr()).collect();
+        let name_ptrs: Vec<*const std::ffi::c_char> = c_names.iter().map(|s| s.as_ptr()).collect();
         let ret = unsafe {
             bit7z_writer_add_items(
                 self.raw.as_ptr(),
-                path_ptrs,
-                c_names.as_ptr(),
+                path_ptrs.as_ptr(),
+                name_ptrs.as_ptr(),
                 c_paths.len() as u32,
             )
         };

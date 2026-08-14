@@ -25,6 +25,10 @@ impl Tree {
         self.nodes.get(&id)
     }
 
+    pub fn node_mut(&mut self, id: VfsNodeId) -> Option<&mut VfsNode> {
+        self.nodes.get_mut(&id)
+    }
+
     pub fn nodes(&self) -> &HashMap<VfsNodeId, VfsNode> {
         &self.nodes
     }
@@ -226,30 +230,15 @@ impl Default for DirtyTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn make_node(name: &str, parent: Option<VfsNodeId>, is_dir: bool) -> VfsNode {
-        VfsNode {
-            id: next_vfs_id(),
-            parent,
-            name: name.to_string(),
-            is_directory: is_dir,
-            original_index: None,
-            fs_path: None,
-        }
+        VfsNode::new(next_vfs_id(), parent, name, is_dir)
     }
 
     #[test]
     fn test_tree_insert_and_find() {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
-        let root_node = VfsNode {
-            id: root_id,
-            parent: None,
-            name: String::new(),
-            is_directory: true,
-            original_index: None,
-            fs_path: None,
-        };
+        let root_node = VfsNode::new(root_id, None, "", true);
         tree.insert_node(root_node).unwrap();
 
         let child = make_node("file.txt", Some(root_id), false);
@@ -263,14 +252,7 @@ mod tests {
     fn test_tree_resolve_nested_path() {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
-        tree.insert_node(VfsNode {
-            id: root_id,
-            parent: None,
-            name: String::new(),
-            is_directory: true,
-            original_index: None,
-            fs_path: None,
-        })
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
         .unwrap();
 
         let dir = make_node("dir", Some(root_id), true);
@@ -289,14 +271,7 @@ mod tests {
     fn test_tree_rename() {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
-        tree.insert_node(VfsNode {
-            id: root_id,
-            parent: None,
-            name: String::new(),
-            is_directory: true,
-            original_index: None,
-            fs_path: None,
-        })
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
         .unwrap();
 
         let file = make_node("old.txt", Some(root_id), false);
@@ -313,14 +288,7 @@ mod tests {
     fn test_tree_remove_node() {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
-        tree.insert_node(VfsNode {
-            id: root_id,
-            parent: None,
-            name: String::new(),
-            is_directory: true,
-            original_index: None,
-            fs_path: None,
-        })
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
         .unwrap();
 
         let file = make_node("delete_me.txt", Some(root_id), false);

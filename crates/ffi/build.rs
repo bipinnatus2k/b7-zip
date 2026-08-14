@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+/// Find the vcpkg installed tree: from VCPKG_ROOT, or by walking up from
+/// the manifest dir looking for a `vcpkg_installed` directory.
 fn find_vcpkg_installed(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start.to_path_buf());
     while let Some(ref d) = dir {
@@ -12,7 +14,7 @@ fn find_vcpkg_installed(start: &Path) -> Option<PathBuf> {
     None
 }
 
-fn main() -> miette::Result<()> {
+fn main() {
     let manifest_str = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let manifest_dir = Path::new(&manifest_str);
 
@@ -25,38 +27,20 @@ fn main() -> miette::Result<()> {
             let vcpkg = find_vcpkg_installed(manifest_dir)?;
             Some(vcpkg.join(&triple))
         });
-    let mut include_paths = vec![manifest_dir.join("src")];
-    if let Some(ref dir) = installed {
-        include_paths.push(dir.join("include"));
-    }
-    let source = manifest_dir.join("src/lib.rs");
-    let mut b = autocxx_build::Builder::new(&source, &include_paths)
-        .auto_allowlist(true)
-        .build()?;
-    b.flag_if_supported("-std=c++17").compile("bit7z-autocxx");
 
-    // Remove include! from inside extern block (Rust 1.72+ compat)
-    if let Ok(out_dir) = std::env::var("OUT_DIR") {
-        let gen_path = Path::new(&out_dir)
-            .join("autocxx-build-dir")
-            .join("rs")
-            .join("autocxx-ffi-default-gen.rs");
-        if gen_path.exists() {
-            let content = std::fs::read_to_string(&gen_path).unwrap_or_default();
-            let pattern = "include ! (\"demo.h\") ; include ! (\"autocxxgen_ffi.h\") ; ";
-            if content.contains(pattern) {
-                let fixed = content.replace(pattern, "");
-                std::fs::write(&gen_path, &fixed).ok();
-                println!("cargo:warning=PATCHED: removed include! from inside extern block");
-            }
-        }
+    let mut build = cc::Build::new();
+    build.cpp(true).file(manifest_dir.join("src/bridge.cc"));
+    build.include(manifest_dir.join("src"));
+    if let Some(ref dir) = installed {
+        build.include(dir.join("include"));
     }
+    // bit7z requires C++17.
+    build.flag_if_supported("/std:c++17");
+    build.flag_if_supported("-std=c++17");
+    build.compile("bit7z-bridge");
 
     if let Some(ref dir) = installed {
-        println!(
-            "cargo:rustc-link-search=native={}",
-            dir.join("lib").display()
-        );
+        println!("cargo:rustc-link-search=native={}", dir.join("lib").display());
         println!("cargo:rustc-link-lib=bit7z64");
         println!("cargo:rustc-link-lib=7zip");
     }
@@ -66,6 +50,7 @@ fn main() -> miette::Result<()> {
         println!("cargo:rustc-link-lib=ole32");
         println!("cargo:rustc-link-lib=user32");
     }
-    println!("cargo:rerun-if-changed=src/lib.rs");
-    Ok(())
+    println!("cargo:rerun-if-changed=src/demo.h");
+    println!("cargo:rerun-if-changed=src/bridge.cc");
+    println!("cargo:rerun-if-changed=src/ffi_gen.rs");
 }
