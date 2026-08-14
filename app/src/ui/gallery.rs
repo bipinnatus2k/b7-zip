@@ -76,6 +76,102 @@ impl Render for Gallery {
                     .child(tf1)
                     .child(tf2),
             )
+            .child(Self::section("Progress"))
+            .child(div().w(px(300.0)).child(ui_kit::ProgressBar::new().progress(0.65)))
+            .child(div().w(px(300.0)).child(ui_kit::ProgressBar::new().indeterminate()))
+            .child(Self::section("Badges"))
+            .child(
+                div().flex_row().gap(px(8.0))
+                    .child(ui_kit::Badge::new("info"))
+                    .child(ui_kit::Badge::new("ok").success())
+                    .child(ui_kit::Badge::new("error").danger())
+                    .child(ui_kit::Badge::new("accent").accent()),
+            )
+            .child(Self::section("Breadcrumb"))
+            .child(ui_kit::Breadcrumb::new().push("C:").push("work").push("docs"))
+            .child(Self::section("Tabs"))
+            .child(ui_kit::Tabs::new().tab("tab-a", "Files").tab("tab-b", "Preview").select("tab-a"))
+            .child(Self::section("List"))
+            .child(
+                ui_kit::List::new()
+                    .row("l-1", "first entry")
+                    .row("l-2", "second entry")
+                    .row("l-3", "third entry")
+                    .select("l-2")
+                    .max_height(120.0),
+            )
+            .child(Self::section("Table"))
+            .child(
+                ui_kit::Table::new()
+                    .column("name", "Name", 160.0)
+                    .column("size", "Size", 90.0).sortable("size")
+                    .row("r-1", vec!["a.txt".into(), "1.2 KB".into()])
+                    .row("r-2", vec!["b.txt".into(), "3.4 KB".into()])
+                    .select("r-1"),
+            )
+            .child(Self::section("Tree"))
+            .child(
+                ui_kit::TreeView::new().root(ui_kit::TreeNode {
+                    id: "t-root".into(),
+                    label: "archive.7z".into(),
+                    expanded: true,
+                    selected: false,
+                    is_directory: true,
+                    children: vec![
+                        ui_kit::TreeNode {
+                            id: "t-dir".into(),
+                            label: "docs".into(),
+                            expanded: true,
+                            selected: false,
+                            is_directory: true,
+                            children: vec![ui_kit::TreeNode {
+                                id: "t-file".into(),
+                                label: "readme.md".into(),
+                                expanded: false,
+                                selected: true,
+                                is_directory: false,
+                                children: vec![],
+                                on_toggle: None,
+                                on_click: None,
+                            }],
+                            on_toggle: None,
+                            on_click: None,
+                        },
+                        ui_kit::TreeNode {
+                            id: "t-other".into(),
+                            label: "notes.txt".into(),
+                            expanded: false,
+                            selected: false,
+                            is_directory: false,
+                            children: vec![],
+                            on_toggle: None,
+                            on_click: None,
+                        },
+                    ],
+                    on_toggle: None,
+                    on_click: None,
+                }),
+            )
+            .child(Self::section("Combo box"))
+            .child(ui_kit::ComboBox::new("combo-1").option("7z", "7z").option("zip", "zip").option("tar", "tar").selected("zip").open())
+            .child(Self::section("Toolbar"))
+            .child(
+                ui_kit::Toolbar::new()
+                    .item(ui_kit::Button::new("tb-open", "Open").on_click(|_| {}))
+                    .item(ui_kit::Button::new("tb-extract", "Extract").on_click(|_| {}))
+                    .item(ui_kit::IconButton::new("tb-cog", "\u{2699}").on_click(|_| {})),
+            )
+            .child(Self::section("Dialog"))
+            .child(
+                div().w(px(460.0)).h(px(260.0)).child(
+                    ui_kit::Dialog::new("Example dialog")
+                        .child(ui_kit::Label::new("This is a modal dialog with content."))
+                        .footer_child(ui_kit::Button::new("dlg-ok", "OK").style(ButtonStyle::Primary).on_click(|_| {}))
+                        .footer_child(ui_kit::Button::new("dlg-cancel", "Cancel").on_click(|_| {})),
+                ),
+            )
+            .child(Self::section("Toast"))
+            .child(ui_kit::Toast::new("Operation completed").severity(ui_kit::ToastSeverity::Success))
             .child(Self::section("Colors"))
             .child(
                 div().flex_row().gap(px(8.0))
