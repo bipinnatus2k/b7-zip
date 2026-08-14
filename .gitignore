@@ -19,3 +19,6 @@ Thumbs.db
 
 # DSH generated
 skills-lock.json
+
+# Release output
+/dist

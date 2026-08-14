@@ -140,6 +140,7 @@ impl ArchiveReader {
     /// Extracts items with per-file overwrite/progress/file callbacks.
     /// `ctx` is passed to every callback as opaque user data.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // ctx is an opaque token passed through to callbacks
     pub fn extract_to_cb(
         &self,
         indices: &[u32],
@@ -181,6 +182,7 @@ impl ArchiveReader {
 
     /// Extract all items with per-file rename/skip/overwrite via RenameCallback.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // ctx is an opaque token passed through to callbacks
     pub fn extract_with_rename(
         &self,
         dest: &str,
