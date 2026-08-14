@@ -19,6 +19,7 @@ members = [
     "crates/paths",
     "crates/session",
     "crates/settings",
+    "crates/shell",
     "crates/settings_macros",
     "crates/system_specs",
     "crates/task",
@@ -106,6 +107,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 settings = { path = "crates/settings" }
 settings_macros = { path = "crates/settings_macros" }
+shell = { path = "crates/shell" }
 strum = "0.27"
 syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 sysinfo = "0.39.6"

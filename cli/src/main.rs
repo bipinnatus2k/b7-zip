@@ -177,9 +177,8 @@ fn run(
             println!("{}  {}", algo.name(), digest);
             Ok(())
         }
-        Commands::ShellInstall | Commands::ShellUninstall => {
-            Err("shell integration arrives with the COM DLL (later step)".into())
-        },
+        Commands::ShellInstall => shell_control(true),
+        Commands::ShellUninstall => shell_control(false),
     }
 }
 
@@ -203,6 +202,48 @@ fn list_archive(
     }
     println!("{} entries", entries.len());
     Ok(())
+}
+
+/// Load the shell COM DLL and call its self-registration entry point.
+fn shell_control(install: bool) -> Result<(), String> {
+    use windows::core::{PCSTR, PCWSTR};
+    use windows::Win32::Foundation::FARPROC;
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+    // Locate shell.dll: next to the executable, then in target/debug.
+    let dll = find_shell_dll().ok_or("shell.dll not found (build the shell crate first)")?;
+    let wide: Vec<u16> = dll.encode_utf16().chain(std::iter::once(0)).collect();
+    let module = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }
+        .map_err(|e| format!("LoadLibraryW({dll:?}): {e}"))?;
+    let entry = if install { "DllRegisterServer" } else { "DllUnregisterServer" };
+    let name: Vec<u8> = entry.bytes().chain(std::iter::once(0)).collect();
+    let proc: FARPROC = unsafe { GetProcAddress(module, PCSTR(name.as_ptr())) };
+    let Some(func) = proc else {
+        return Err(format!("{entry} not exported from {dll:?}"));
+    };
+    let func: unsafe extern "system" fn() -> i32 =
+        unsafe { std::mem::transmute(func) };
+    let hr = unsafe { func() };
+    if hr < 0 {
+        Err(format!("{entry} failed with HRESULT {hr:#x}"))
+    } else {
+        println!("{}", if install { "shell extension registered" } else { "shell extension unregistered" });
+        Ok(())
+    }
+}
+
+/// Locate the shell COM DLL for self-registration.
+fn find_shell_dll() -> Option<String> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let candidates = [
+        exe_dir.join("shell.dll"),
+        PathBuf::from("target/debug/shell.dll"),
+        PathBuf::from("target/release/shell.dll"),
+    ];
+    candidates
+        .into_iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_string_lossy().into_owned())
 }
 
 fn drain_events(rx: std::sync::mpsc::Receiver<task::TaskEvent>) {
