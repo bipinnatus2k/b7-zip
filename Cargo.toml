@@ -11,6 +11,7 @@ members = [
     "crates/explorer",
     "crates/ffi",
     "crates/format_detector",
+    "crates/fs_watcher",
     "crates/password",
     "crates/paths",
     "crates/session",
