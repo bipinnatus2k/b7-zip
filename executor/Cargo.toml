@@ -10,6 +10,7 @@ name = "bit7z-executor"
 path = "src/main.rs"
 
 [dependencies]
+bit7z-explorer.workspace = true
 bit7z-rs.workspace = true
 clap.workspace = true
 gpui.workspace = true
@@ -17,7 +18,7 @@ gpui_platform.workspace = true
 password.workspace = true
 task.workspace = true
 temp.workspace = true
-ui_kit.workspace = true
+guise-ui.workspace = true
 
 [lints]
 workspace = true

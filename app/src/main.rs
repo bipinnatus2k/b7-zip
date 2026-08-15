@@ -10,13 +10,13 @@ const _: () = assert!(
     "app_constants::APP_NAME_LOWERCASE must match the binary name.",
 );
 
-mod ui;
 mod workspace;
 
 use assets::Assets;
 use clap::Parser;
-use gpui::{AppContext, Application, WindowOptions};
+use gpui::{AppContext, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use gpui_platform;
+use guise::theme::Theme;
 use std::path::PathBuf;
 
 /// Command-line arguments.
@@ -27,9 +27,9 @@ struct Args {
     paths: Vec<PathBuf>,
 }
 
-fn build_application() -> Application {
+fn build_application() -> gpui::Application {
     let platform = gpui_platform::current_platform(false);
-    Application::with_platform(platform)
+    gpui::Application::with_platform(platform)
 }
 
 fn main() {
@@ -37,16 +37,30 @@ fn main() {
     let app = build_application().with_assets(Assets);
 
     app.run(move |cx| {
+        // The Mantine-style theme driving every guise component.
+        Theme::dark().init(cx);
+
         let paths = args.paths.clone();
-        cx.open_window(WindowOptions::default(), |_window, cx| {
-            cx.new(|cx| {
-                let mut workspace = workspace::Workspace::new(cx);
-                if let Some(path) = paths.first() {
-                    workspace.open_archive(path, cx);
-                }
-                workspace
-            })
-        })
+        let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some(SharedString::new_static("Bit7zFM")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |_window, cx| {
+                cx.new(|cx| {
+                    let mut workspace = workspace::Workspace::new(cx);
+                    if let Some(path) = paths.first() {
+                        workspace.open_archive(path, cx);
+                    }
+                    workspace
+                })
+            },
+        )
         .expect("failed to open window");
     });
 }

@@ -4,10 +4,10 @@
 //! Supports the algorithms most commonly needed by archive managers:
 //! CRC32, CRC64, MD5, SHA-1, SHA-256 and SHA-512.
 
+use crc_fast::CrcAlgorithm;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
 use std::path::Path;
-
-use serde::{Deserialize, Serialize};
 
 /// Checksum algorithms supported by this component.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -123,65 +123,60 @@ impl IncrementalHasher for Crc32Hasher {
 /// Implemented here (table-driven, dependency-free) instead of using the
 /// `crc` crate because its `Digest` borrows the `Crc` instance, which makes
 /// incremental hashing inside a boxed trait object awkward.
-struct Crc64Hasher {
-    table: [u64; 256],
-    value: u64,
-}
+struct Crc64Hasher(crc_fast::Digest);
 
 impl Crc64Hasher {
     fn new() -> Self {
-        // MSB-first (non-reflected) table: for a byte index i, the table
-        // entry is the CRC of the byte shifted into the top of the register.
-        let mut table = [0u64; 256];
-        for i in 0..256u64 {
-            let mut crc = i << 56;
-            for _ in 0..8 {
-                crc = if crc & 0x8000_0000_0000_0000 != 0 {
-                    (crc << 1) ^ 0x42F0E1EBA9EA3693
-                } else {
-                    crc << 1
-                };
-            }
-            table[i as usize] = crc;
-        }
-        Self { table, value: 0 }
+        let digest = crc_fast::Digest::new(CrcAlgorithm::Crc64Ecma182);
+        Self { 0: digest }
     }
 }
 
 impl IncrementalHasher for Crc64Hasher {
-    fn update(&mut self, data: &[u8]) {
-        for &byte in data {
-            let index = ((self.value >> 56) ^ u64::from(byte)) as usize;
-            self.value = (self.value << 8) ^ self.table[index];
-        }
-    }
+    fn update(&mut self, data: &[u8]) { self.0.update(data); }
     fn finalize_hex(&self) -> String {
-        format!("{:016x}", self.value)
+        format!("{:016x}", self.0.finalize())
     }
 }
 
 struct Md5Hasher(md5::Md5);
 impl IncrementalHasher for Md5Hasher {
-    fn update(&mut self, data: &[u8]) { use md5::Digest; self.0.update(data); }
-    fn finalize_hex(&self) -> String { use md5::Digest; hex(&self.0.clone().finalize()) }
+    fn update(&mut self, data: &[u8]) {
+        use md5::Digest;
+        self.0.update(data); }
+    fn finalize_hex(&self) -> String {
+        use md5::Digest;
+        hex(&self.0.clone().finalize()) }
 }
 
 struct Sha1Hasher(sha1::Sha1);
 impl IncrementalHasher for Sha1Hasher {
-    fn update(&mut self, data: &[u8]) { use sha1::Digest; self.0.update(data); }
-    fn finalize_hex(&self) -> String { use sha1::Digest; hex(&self.0.clone().finalize()) }
+    fn update(&mut self, data: &[u8]) {
+        use sha1::Digest;
+        self.0.update(data); }
+    fn finalize_hex(&self) -> String {
+        use sha1::Digest;
+        hex(&self.0.clone().finalize()) }
 }
 
 struct Sha256Hasher(sha2::Sha256);
 impl IncrementalHasher for Sha256Hasher {
-    fn update(&mut self, data: &[u8]) { use sha2::Digest; self.0.update(data); }
-    fn finalize_hex(&self) -> String { use sha2::Digest; hex(&self.0.clone().finalize()) }
+    fn update(&mut self, data: &[u8]) {
+        use sha2::Digest;
+        self.0.update(data); }
+    fn finalize_hex(&self) -> String {
+        use sha2::Digest;
+        hex(&self.0.clone().finalize()) }
 }
 
 struct Sha512Hasher(sha2::Sha512);
 impl IncrementalHasher for Sha512Hasher {
-    fn update(&mut self, data: &[u8]) { use sha2::Digest; self.0.update(data); }
-    fn finalize_hex(&self) -> String { use sha2::Digest; hex(&self.0.clone().finalize()) }
+    fn update(&mut self, data: &[u8]) {
+        use sha2::Digest;
+        self.0.update(data); }
+    fn finalize_hex(&self) -> String {
+        use sha2::Digest;
+        hex(&self.0.clone().finalize()) }
 }
 
 fn hex(bytes: &[u8]) -> String {

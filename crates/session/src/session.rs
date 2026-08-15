@@ -165,6 +165,17 @@ impl ArchiveSession {
     pub fn discard(&mut self) {
         self.overlay.discard_pending();
     }
+
+    /// Re-list the archive and rebuild the overlay from scratch. Used by the
+    /// manager after operations that modify the archive in place (delete,
+    /// rename, ...) so the view reflects the new contents.
+    pub fn reload(&mut self) -> Result<(), SessionError> {
+        let entries = self.engine.list(&self.archive_path, self.password.as_ref())?;
+        let tree = archive_vfs_crate::build_tree(&entries);
+        self.overlay = Overlay::new(tree);
+        self.fs_tree = FsTree::scan(&self.work_dir)?;
+        Ok(())
+    }
 }
 
 /// Errors produced by sessions.

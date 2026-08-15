@@ -118,15 +118,26 @@ pub enum OverwriteMode {
     AutoRename,
 }
 
+/// A progress callback: `(bytes_processed, bytes_total)`.
+/// Return value is not used; cancellation goes through the `cancel` flag.
+pub type ProgressFn = dyn Fn(u64, u64) + Send + Sync;
+
+/// A per-file callback: the archive path of the file being processed.
+pub type FileFn = dyn Fn(&str) + Send + Sync;
+
 /// Options for an extraction operation.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ExtractOptions {
     pub overwrite: OverwriteMode,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional byte progress callback (invoked from the worker thread).
+    pub progress: Option<std::sync::Arc<ProgressFn>>,
+    /// Optional per-file callback (invoked from the worker thread).
+    pub file: Option<std::sync::Arc<FileFn>>,
 }
 
 /// Options for a compression operation.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompressOptions {
     pub format: crate::WriterFormat,
     pub level: crate::WriterCompressionLevel,
@@ -139,6 +150,10 @@ pub struct CompressOptions {
     pub password: Option<String>,
     pub encrypt_headers: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional byte progress callback (invoked from the worker thread).
+    pub progress: Option<std::sync::Arc<ProgressFn>>,
+    /// Optional per-file callback (invoked from the worker thread).
+    pub file: Option<std::sync::Arc<FileFn>>,
 }
 
 impl Default for CompressOptions {
@@ -155,6 +170,8 @@ impl Default for CompressOptions {
             password: None,
             encrypt_headers: false,
             cancel: None,
+            progress: None,
+            file: None,
         }
     }
 }

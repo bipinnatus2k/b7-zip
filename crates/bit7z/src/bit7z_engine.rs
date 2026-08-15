@@ -17,6 +17,8 @@ use crate::writer::{ArchiveWriter, WriterFormat};
 use crate::editor::ArchiveEditor;
 use std::ffi::{CStr, CString};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::path::{Path, PathBuf};
 
 /// Engine implementation backed by the bit7z C++ library.
@@ -53,6 +55,80 @@ impl Bit7zEngine {
         drop(reader);
         result
     }
+}
+
+// ============================================================================
+// FFI callback trampolines (progress / per-file / cancel / skip-on-overwrite)
+// ============================================================================
+
+/// User-data passed through the FFI to the C callbacks.
+struct CallbackCtx {
+    progress: Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
+    file: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+/// on_progress: return 0 to cancel, non-zero to continue.
+unsafe extern "C" fn progress_trampoline(
+    processed: u64,
+    total: u64,
+    ctx: *mut std::ffi::c_void,
+) -> i32 {
+    if ctx.is_null() {
+        return 1;
+    }
+    let ctx = unsafe { &*(ctx as *const CallbackCtx) };
+    if ctx.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return 0;
+    }
+    if let Some(progress) = &ctx.progress {
+        progress(processed, total);
+    }
+    1
+}
+
+/// Reader on_file: (path, file_size, ctx).
+unsafe extern "C" fn file_trampoline_reader(
+    path: *const std::ffi::c_char,
+    _size: u64,
+    ctx: *mut std::ffi::c_void,
+) {
+    if ctx.is_null() || path.is_null() {
+        return;
+    }
+    let ctx = unsafe { &*(ctx as *const CallbackCtx) };
+    if let Some(file) = &ctx.file {
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        file(&path);
+    }
+}
+
+/// Writer on_file: (path, ctx).
+unsafe extern "C" fn file_trampoline_writer(
+    path: *const std::ffi::c_char,
+    ctx: *mut std::ffi::c_void,
+) {
+    if ctx.is_null() || path.is_null() {
+        return;
+    }
+    let ctx = unsafe { &*(ctx as *const CallbackCtx) };
+    if let Some(file) = &ctx.file {
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        file(&path);
+    }
+}
+
+/// on_overwrite: 0 = overwrite, 1 = skip. Used for the Skip policy.
+unsafe extern "C" fn overwrite_skip_trampoline(
+    _src: *const std::ffi::c_char,
+    _dest: *const std::ffi::c_char,
+    _existing_size: u64,
+    _src_size: u64,
+    _src_mtime: i64,
+    _dest_mtime: i64,
+    _ctx: *mut std::ffi::c_void,
+) -> i32 {
+    1
 }
 
 fn path_to_cstring(path: &Path) -> Result<String, ArchiveError> {
@@ -153,29 +229,68 @@ impl ArchiveEngine for Bit7zEngine {
 
     fn extract(&self, path: &Path, indices: &[u32], dest: &Path, password: Option<&password::Password>, options: &ExtractOptions) -> Result<(), ArchiveError> {
         let dest_str = path_to_cstring(dest)?;
-        self.with_reader(path, password, |reader| {
+        let with_callbacks = options.progress.is_some()
+            || options.file.is_some()
+            || options.cancel.is_some()
+            || options.overwrite == OverwriteMode::Skip;
+
+        let result = self.with_reader(path, password, |reader| {
             let c_dest = CString::new(dest_str.as_str()).map_err(|e| ArchiveError::Engine(e.to_string()))?;
-            // on_overwrite trampoline: 0 = overwrite, 1 = skip
-            let mode = match options.overwrite {
-                OverwriteMode::Overwrite => 0i32,
-                OverwriteMode::Skip | OverwriteMode::AutoRename => 1i32,
-                OverwriteMode::Ask => 1i32, // Ask is handled at a higher level via extract_with_callback
-            };
-            let ret = unsafe {
-                bit7z_ffi::bit7z_reader_extract_to(
-                    reader.raw_handle().as_ptr(),
-                    indices.as_ptr(),
-                    indices.len() as u32,
-                    c_dest.as_ptr(),
-                )
-            };
-            let _ = mode;
-            if ret != 0 {
-                Err(ArchiveError::Engine("extraction failed".into()))
-            } else {
-                Ok(())
+            if !with_callbacks {
+                let ret = unsafe {
+                    bit7z_ffi::bit7z_reader_extract_to(
+                        reader.raw_handle().as_ptr(),
+                        indices.as_ptr(),
+                        indices.len() as u32,
+                        c_dest.as_ptr(),
+                    )
+                };
+                if ret != 0 {
+                    return Err(ArchiveError::Engine("extraction failed".into()));
+                }
+                return Ok(());
             }
-        })
+
+            // Callback-driven path: per-file and byte progress flow through
+            // the trampolines; the cancel flag aborts the extraction.
+            let ctx = CallbackCtx {
+                progress: options.progress.clone(),
+                file: options.file.clone(),
+                cancel: options.cancel.clone(),
+            };
+            let mut ctx = ctx;
+            let on_overwrite: Option<
+                unsafe extern "C" fn(
+                    *const std::ffi::c_char,
+                    *const std::ffi::c_char,
+                    u64,
+                    u64,
+                    i64,
+                    i64,
+                    *mut std::ffi::c_void,
+                ) -> i32,
+            > = match options.overwrite {
+                // The C++ default (no callback) already overwrites.
+                OverwriteMode::Overwrite => None,
+                OverwriteMode::Skip | OverwriteMode::AutoRename | OverwriteMode::Ask => {
+                    Some(overwrite_skip_trampoline)
+                }
+            };
+            reader
+                .extract_to_cb(
+                    indices,
+                    &dest_str,
+                    &mut ctx as *mut CallbackCtx as *mut std::ffi::c_void,
+                    on_overwrite,
+                    Some(progress_trampoline),
+                    Some(file_trampoline_reader),
+                )
+                .map_err(ArchiveError::Engine)
+        });
+        if result.is_ok() && options.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(ArchiveError::Cancelled);
+        }
+        result
     }
 
     fn extract_to_buffer(&self, path: &Path, index: u32, password: Option<&password::Password>) -> Result<Vec<u8>, ArchiveError> {
@@ -221,8 +336,34 @@ impl ArchiveEngine for Bit7zEngine {
             .map(|p| p.to_str().ok_or_else(|| ArchiveError::Engine("input path not UTF-8".into())))
             .collect::<Result<_, _>>()?;
         writer.add_files(&c_inputs).map_err(ArchiveError::Engine)?;
-        writer.compress_to(target.to_str().ok_or_else(|| ArchiveError::Engine("target path not UTF-8".into()))? )
+        let target_str = target.to_str().ok_or_else(|| ArchiveError::Engine("target path not UTF-8".into()))?;
+
+        let with_callbacks =
+            options.progress.is_some() || options.file.is_some() || options.cancel.is_some();
+        let result = if with_callbacks {
+            let ctx = CallbackCtx {
+                progress: options.progress.clone(),
+                file: options.file.clone(),
+                cancel: options.cancel.clone(),
+            };
+            let mut ctx = ctx;
+            // SAFETY: ctx outlives the synchronous compress call.
+            unsafe {
+                writer.compress_to_cb(
+                    target_str,
+                    &mut ctx as *mut CallbackCtx as *mut std::ffi::c_void,
+                    Some(progress_trampoline),
+                    Some(file_trampoline_writer),
+                )
+            }
             .map_err(ArchiveError::Engine)
+        } else {
+            writer.compress_to(target_str).map_err(ArchiveError::Engine)
+        };
+        if result.is_ok() && options.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(ArchiveError::Cancelled);
+        }
+        result
     }
 
     fn update(&self, path: &Path, ops: &[EngineOp], password: Option<&password::Password>) -> Result<(), ArchiveError> {

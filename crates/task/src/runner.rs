@@ -34,11 +34,22 @@ impl TaskRunner {
 
     /// Run a job on a background thread; returns the event stream.
     pub fn run(&self, job: JobSpec, password: Option<&password::Password>) -> Receiver<TaskEvent> {
+        self.run_with_cancel(job, password, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Like [`run`](Self::run) but with a cancellation flag the caller can
+    /// flip to abort the operation.
+    pub fn run_with_cancel(
+        &self,
+        job: JobSpec,
+        password: Option<&password::Password>,
+        cancel: Arc<AtomicBool>,
+    ) -> Receiver<TaskEvent> {
         let (tx, rx) = channel::<TaskEvent>();
         let engine = self.engine.clone();
         let password = password.cloned();
         std::thread::spawn(move || {
-            let result = run_job(engine.as_ref(), &job, password.as_ref(), &tx);
+            let result = run_job(engine.as_ref(), &job, password.as_ref(), &tx, &cancel);
             let message = match &result {
                 Ok(()) => "ok".to_string(),
                 Err(error) => error.to_string(),
@@ -57,13 +68,30 @@ fn run_job(
     job: &JobSpec,
     password: Option<&password::Password>,
     tx: &Sender<TaskEvent>,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<(), bit7z_rs::ArchiveError> {
     match job {
         JobSpec::Extract { archive, items, target, overwrite, .. } => {
             std::fs::create_dir_all(target)?;
+            let progress = {
+                let tx = tx.clone();
+                Arc::new(move |processed: u64, total: u64| {
+                    let _ = tx.send(TaskEvent::Progress { processed, total });
+                }) as Arc<dyn Fn(u64, u64) + Send + Sync>
+            };
+            let file = {
+                let tx = tx.clone();
+                Arc::new(move |path: &str| {
+                    let _ = tx.send(TaskEvent::FileStarted {
+                        path: path.to_string(),
+                    });
+                }) as Arc<dyn Fn(&str) + Send + Sync>
+            };
             let options = ExtractOptions {
                 overwrite: (*overwrite).into(),
-                cancel: None,
+                cancel: Some(cancel.clone()),
+                progress: Some(progress),
+                file: Some(file),
             };
             // An empty item list means "extract everything"; resolve it to the
             // full index set (an empty slice would be UB at the FFI boundary).
@@ -89,6 +117,20 @@ fn run_job(
             encrypt_headers,
             ..
         } => {
+            let progress = {
+                let tx = tx.clone();
+                Arc::new(move |processed: u64, total: u64| {
+                    let _ = tx.send(TaskEvent::Progress { processed, total });
+                }) as Arc<dyn Fn(u64, u64) + Send + Sync>
+            };
+            let file = {
+                let tx = tx.clone();
+                Arc::new(move |path: &str| {
+                    let _ = tx.send(TaskEvent::FileStarted {
+                        path: path.to_string(),
+                    });
+                }) as Arc<dyn Fn(&str) + Send + Sync>
+            };
             let options = CompressOptions {
                 format: (*format).into(),
                 level: (*level).into(),
@@ -100,7 +142,9 @@ fn run_job(
                 threads: threads.unwrap_or(0),
                 password: password.map(|p| p.as_str().to_string()),
                 encrypt_headers: *encrypt_headers,
-                cancel: None,
+                cancel: Some(cancel.clone()),
+                progress: Some(progress),
+                file: Some(file),
             };
             engine.compress(inputs, target, &options)
         }
