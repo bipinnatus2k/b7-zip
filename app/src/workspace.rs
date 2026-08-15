@@ -5,7 +5,7 @@
 //! dialog driven by real engine callbacks.
 
 use bit7z_explorer::{ArchiveExplorer, EntryRow, ExplorerCommand, ExplorerEvent};
-use bit7z_rs::{ArchiveEngine, ArchiveError, Bit7zEngine};
+use bit7z_rs::{ArchiveEngine, ArchiveError};
 use gpui::{
     App, AppContext, Context, Entity, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, SharedString, Styled, WeakEntity, Window, div, px,
@@ -99,15 +99,8 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    /// Create the workspace with a freshly loaded engine.
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let engine: Arc<dyn ArchiveEngine> = match Bit7zEngine::new(bit7z_rs::locate_dll().as_deref()) {
-            Ok(engine) => Arc::new(engine),
-            Err(error) => {
-                eprintln!("failed to load 7-Zip engine: {error}");
-                Arc::new(NoopEngine)
-            }
-        };
+    /// Create the workspace with the given engine.
+    pub fn new(engine: Arc<dyn ArchiveEngine>, cx: &mut Context<Self>) -> Self {
         Self {
             engine,
             sessions: SessionStore::new(),
@@ -1351,36 +1344,6 @@ fn open_with_os(path: &Path) {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = std::process::Command::new("xdg-open").arg(path).spawn();
-    }
-}
-
-/// A no-op engine used when the 7-Zip DLL is unavailable.
-struct NoopEngine;
-
-impl ArchiveEngine for NoopEngine {
-    fn list(&self, _path: &Path, _password: Option<&Password>) -> Result<Vec<bit7z_rs::ArchiveEntry>, ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn extract(&self, _path: &Path, _indices: &[u32], _dest: &Path, _password: Option<&Password>, _options: &bit7z_rs::ExtractOptions) -> Result<(), ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn extract_to_buffer(&self, _path: &Path, _index: u32, _password: Option<&Password>) -> Result<Vec<u8>, ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn test(&self, _path: &Path, _password: Option<&Password>) -> Result<bit7z_rs::TestResult, ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn compress(&self, _inputs: &[PathBuf], _target: &Path, _options: &bit7z_rs::CompressOptions) -> Result<(), ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn update(&self, _path: &Path, _ops: &[bit7z_rs::EngineOp], _password: Option<&Password>) -> Result<(), ArchiveError> {
-        Err(ArchiveError::Engine("7-Zip engine unavailable".into()))
-    }
-    fn is_encrypted(&self, _path: &Path) -> Result<bool, ArchiveError> {
-        Ok(false)
-    }
-    fn is_header_encrypted(&self, _path: &Path) -> Result<bool, ArchiveError> {
-        Ok(false)
     }
 }
 
