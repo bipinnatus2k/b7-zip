@@ -58,7 +58,7 @@ impl ExecutorApp {
             }
         };
 
-        let engine: Arc<dyn ArchiveEngine> = match Bit7zEngine::new(find_dll().as_deref()) {
+        let engine: Arc<dyn ArchiveEngine> = match Bit7zEngine::new(bit7z_rs::locate_dll().as_deref()) {
             Ok(engine) => Arc::new(engine),
             Err(error) => return Self::failed(format!("engine load failed: {error}")),
         };
@@ -217,28 +217,6 @@ impl Render for ExecutorApp {
                     .right(Text::new("bit7z-executor").size(Size::Xs).dimmed()),
             )
     }
-}
-
-/// Locate the 7-Zip DLL: next to the executable, then VCPKG_ROOT.
-fn find_dll() -> Option<String> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    for name in ["7z.dll", "7zip.dll"] {
-        let candidate = exe_dir.join(name);
-        if candidate.exists() {
-            return Some(candidate.to_string_lossy().into_owned());
-        }
-    }
-    if let Ok(vcpkg) = std::env::var("VCPKG_ROOT") {
-        for name in ["7zip.dll", "7z.dll"] {
-            let candidate = PathBuf::from(&vcpkg)
-                .join("installed/x64-windows/bin")
-                .join(name);
-            if candidate.exists() {
-                return Some(candidate.to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
 }
 
 fn main() {

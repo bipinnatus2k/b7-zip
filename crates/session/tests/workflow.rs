@@ -8,18 +8,9 @@ use session::{ArchiveSession, SessionStore};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-fn find_dll() -> Option<PathBuf> {
-    let vcpkg = std::env::var("VCPKG_ROOT").ok()?;
-    let candidates = [
-        format!("{vcpkg}/installed/x64-windows/bin/7zip.dll"),
-        format!("{vcpkg}/installed/x64-windows/bin/7z.dll"),
-    ];
-    candidates.iter().map(PathBuf::from).find(|p| p.exists())
-}
-
 fn engine() -> Option<Arc<dyn ArchiveEngine>> {
-    let dll = find_dll()?;
-    Some(Arc::new(Bit7zEngine::new(Some(dll.to_str()?)).ok()?))
+    let dll = bit7z_rs::locate_dll()?;
+    Some(Arc::new(Bit7zEngine::new(Some(dll.as_path())).ok()?))
 }
 
 fn make_archive(dir: &std::path::Path, engine: &Arc<dyn ArchiveEngine>) -> PathBuf {

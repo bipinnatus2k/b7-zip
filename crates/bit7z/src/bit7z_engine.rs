@@ -31,8 +31,9 @@ impl Bit7zEngine {
     ///
     /// `dll_path` — optional explicit path to `7z.dll` (or `7zip.dll`);
     /// `None` lets bit7z search its default locations.
-    pub fn new(dll_path: Option<&str>) -> Result<Self, ArchiveError> {
-        let lib = match dll_path {
+    pub fn new(dll_path: Option<&Path>) -> Result<Self, ArchiveError> {
+        let path = dll_path.map(|p| p.to_string_lossy());
+        let lib = match &path {
             Some(path) => Bit7zLibrary::open(path)?,
             None => Bit7zLibrary::open("")?,
         };

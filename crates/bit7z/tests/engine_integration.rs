@@ -4,20 +4,10 @@
 //! discoverable via `VCPKG_ROOT`; they are skipped otherwise.
 
 use bit7z_rs::{ArchiveEngine, Bit7zEngine, CompressOptions, WriterFormat};
-use std::path::{Path, PathBuf};
-
-fn find_dll() -> Option<PathBuf> {
-    let vcpkg = std::env::var("VCPKG_ROOT").ok()?;
-    let candidates = [
-        format!("{vcpkg}/installed/x64-windows/bin/7zip.dll"),
-        format!("{vcpkg}/installed/x64-windows/bin/7z.dll"),
-    ];
-    candidates.iter().map(PathBuf::from).find(|p| p.exists())
-}
 
 fn engine() -> Option<Bit7zEngine> {
-    let dll = find_dll()?;
-    Bit7zEngine::new(Some(dll.to_str()?)).ok()
+    let dll = bit7z_rs::locate_dll()?;
+    Bit7zEngine::new(Some(dll.as_path())).ok()
 }
 
 #[test]
