@@ -13,7 +13,6 @@ path = "src/main.rs"
 bit7z-rs.workspace = true
 checksum.workspace = true
 clap.workspace = true
-format_detector.workspace = true
 password.workspace = true
 task.workspace = true
 windows = { workspace = true, features = [

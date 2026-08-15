@@ -8,7 +8,7 @@ license.workspace = true
 bit7z-ffi.workspace = true
 jiff.workspace = true
 password.workspace = true
-thiserror = "2.0.19"
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

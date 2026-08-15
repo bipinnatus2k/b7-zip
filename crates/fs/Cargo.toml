@@ -10,7 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 fs_watcher.workspace = true
-thiserror = "2.0.19"
+thiserror.workspace = true
 jiff.workspace = true
 vfs.workspace = true
 

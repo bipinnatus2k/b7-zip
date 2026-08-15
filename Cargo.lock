@@ -232,34 +232,20 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "app"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "app_constants",
  "assets",
  "bit7z-explorer",
  "bit7z-rs",
  "clap",
- "collections",
- "crashes",
- "futures",
  "gpui",
  "gpui_platform",
  "guise-ui",
- "log",
- "parking_lot",
  "password",
- "path",
- "paths",
- "rayon",
  "rfd",
- "serde",
- "serde_json",
  "session",
  "task",
  "temp",
- "util",
- "uuid",
  "vfs",
- "windows 0.57.0",
 ]
 
 [[package]]
@@ -733,7 +719,6 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "guise-ui",
- "password",
  "session",
  "tempfile",
  "vfs",
@@ -1157,7 +1142,6 @@ dependencies = [
  "bit7z-rs",
  "checksum",
  "clap",
- "format_detector",
  "password",
  "task",
  "windows 0.61.3",

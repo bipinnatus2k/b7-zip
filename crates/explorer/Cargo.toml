@@ -10,7 +10,6 @@ workspace = true
 
 [dependencies]
 gpui.workspace = true
-password.workspace = true
 session.workspace = true
 guise-ui.workspace = true
 vfs.workspace = true

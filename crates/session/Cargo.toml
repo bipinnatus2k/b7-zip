@@ -16,7 +16,7 @@ fs_watcher.workspace = true
 password.workspace = true
 task.workspace = true
 temp.workspace = true
-thiserror = "2.0.19"
+thiserror.workspace = true
 vfs.workspace = true
 
 [lints]

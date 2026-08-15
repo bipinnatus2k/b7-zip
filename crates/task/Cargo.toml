@@ -14,7 +14,7 @@ checksum.workspace = true
 password.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror = "2.0.19"
+thiserror.workspace = true
 vfs.workspace = true
 
 [lints]

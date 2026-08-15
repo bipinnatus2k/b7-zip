@@ -9,6 +9,7 @@ members = [
     "crates/assets",
     "crates/bit7z",
     "crates/checksum",
+    "crates/crashes",
     "crates/explorer",
     "crates/ffi",
     "crates/fs",
@@ -47,53 +48,22 @@ repository = ""
 
 [workspace.dependencies]
 anyhow = "1"
-ashpd = { version = "0.13", default-features = false, features = [
-    "async-io",
-    "notification",
-    "open_uri",
-    "file_chooser",
-    "settings",
-    "trash",
-] }
 app_constants = { path = "crates/app_constants" }
 archive_vfs = { path = "crates/archive_vfs" }
 assets = { path = "crates/assets" }
-async-channel = "2.5.0"
-async-compat = "0.2.1"
-async-compression = { version = "0.4", features = ["bzip2", "gzip", "futures-io"] }
-async-dispatcher = "0.1"
-async-fs = "2.1"
-async-io = "2.6.0"
-async-lock = "3.4.2"
-async-pipe = { git = "https://github.com/zed-industries/async-pipe-rs", rev = "82d00a04211cf4e1236029aa03e6b6ce2a74c553" }
 async-process = "2.5.0"
-async-recursion = "1.0.0"
-# `unstable` is required to compile async-tar's Windows symlink support.
-async-std = { version = "1.12", features = ["unstable"] }
-async-tar = "0.6"
-async-task = "4.7"
-async-trait = "0.1"
-async-tungstenite = "0.31.0"
 bit7z-ffi = { path = "crates/ffi" }
 bit7z-rs = { path = "crates/bit7z" }
 clap = { version = "4", features = ["derive"] }
-collections = { git = "https://github.com/zed-industries/zed" }
 const_format = "0.2"
 crash-handler = "0.7"
 checksum = { path = "crates/checksum" }
-crashes = { path = "crates/crashes" }
 dirs = "6.0"
-explorer = { path = "crates/explorer" }
 bit7z-explorer = { path = "crates/explorer" }
-format_detector = { path = "crates/format_detector" }
-futures = "0.3"
 gpui = { git = "https://github.com/zed-industries/zed" }
-gpui-tray = { path = "crates/thirdparties/gpui-tray" }
-gpui_macros = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
 human_bytes = "0.4.3"
 ignore = "0.4.22"
-inventory = "0.3.24"
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
 log = "0.4.33"
@@ -102,28 +72,21 @@ minidumper = "0.9"
 parking_lot = "0.12.5"
 password = { path = "crates/password" }
 session = { path = "crates/session" }
-path = { git = "https://github.com/zed-industries/zed" }
-paths = { path = "crates/paths" }
 pciid-parser = "0.8.1"
-quote = "1.0.47"
 rust-embed = { version = "8.11", features = ["include-exclude"] }
-schemars = "1"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
-shell = { path = "crates/shell" }
-strum = "0.27"
-syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
 sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
 task = { path = "crates/task" }
 temp = { path = "crates/temp" }
+thiserror = "2.0.19"
 vfs = { path = "crates/vfs" }
 fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }
 guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
 rfd = { version = "0.15", default-features = false }
-tracing = "0.1"
 util = { git = "https://github.com/zed-industries/zed" }
 zstd = "0.11"
 
