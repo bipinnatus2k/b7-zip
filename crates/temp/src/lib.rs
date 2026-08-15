@@ -128,8 +128,11 @@ pub fn sanitize_relative(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
 
+    static ROOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn defaults_to_system_temp() {
+        let _root = ROOT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         unregister_temp_root();
         assert!(!is_registered());
         assert_eq!(temp_root(), std::env::temp_dir());
@@ -137,6 +140,7 @@ mod tests {
 
     #[test]
     fn register_and_reset() {
+        let _root = ROOT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dir_canon = strip_verbatim_prefix(dir.path().canonicalize().unwrap());
         let root = register_temp_root(dir.path()).unwrap();
@@ -151,6 +155,7 @@ mod tests {
 
     #[test]
     fn register_replaces_previous() {
+        let _root = ROOT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
         register_temp_root(a.path()).unwrap();
@@ -160,6 +165,7 @@ mod tests {
 
     #[test]
     fn derived_paths_use_current_root() {
+        let _root = ROOT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         unregister_temp_root();
         let dir = tempfile::tempdir().unwrap();
         let dir_canon = strip_verbatim_prefix(dir.path().canonicalize().unwrap());
@@ -196,6 +202,7 @@ mod tests {
 
     #[test]
     fn resolve_in_temp_stays_inside_root() {
+        let _root = ROOT_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let dir_canon = strip_verbatim_prefix(dir.path().canonicalize().unwrap());
         register_temp_root(dir.path()).unwrap();
