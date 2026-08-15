@@ -4,7 +4,7 @@ resolver = "3"
 members = [
     "app",
     "cli",
-    "crates/app_constants", "crates/app_env",
+    "crates/app_constants",
     "crates/archive_vfs",
     "crates/assets",
     "crates/bit7z",
@@ -18,9 +18,7 @@ members = [
     "crates/password",
     "crates/paths",
     "crates/session",
-    "crates/settings",
     "crates/shell",
-    "crates/settings_macros",
     "crates/system_specs",
     "crates/task",
     "crates/temp",
@@ -113,8 +111,6 @@ schemars = "1"
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
-settings = { path = "crates/settings" }
-settings_macros = { path = "crates/settings_macros" }
 shell = { path = "crates/shell" }
 strum = "0.27"
 syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }

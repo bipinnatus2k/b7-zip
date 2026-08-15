@@ -11,7 +11,7 @@ so each component can be developed, tested, and reused independently.
 |-----------------|-------------------------------------------------------------|
 | `crates/ffi`     | Hand-written C++ bridge (`demo.h` + `bridge.cc`) exposing bit7z as `extern "C"`, compiled with the `cc` crate |
 | `crates/bit7z`   | Safe Rust wrapper: `ArchiveEngine` trait + `Bit7zEngine` (Mutex-serialized FFI) |
-| `crates/vfs`     | Archive-agnostic VFS: `VfsNode`, `Tree`, `Overlay` (base+working+dirty), `diff::build_changeset`, `Changeset`, `EditQueue` |
+| `crates/vfs`     | Archive-agnostic VFS: `VfsNode`, `Tree`, `Overlay` (base+working+dirty), `diff::build_changeset`, `Changeset` |
 | `crates/archive_vfs` | Builds a `Tree` from `ArchiveEntry` lists (synthetic directories) |
 | `crates/fs`      | Physical `FsTree` (scan + watcher events) and attribute filling |
 | `crates/fs_watcher` | Independent file-system watcher (`FsEvent` stream, notify crate) |

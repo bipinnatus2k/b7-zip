@@ -9,7 +9,6 @@
 //! * [`Overlay`] — layering a working tree over a base tree, tracking
 //!   dirty nodes; [`diff::build_changeset`] turns that into a [`Changeset`]
 //!   ready for a task runner to commit.
-//! * [`queue`] — an undo/redo transaction queue for in-memory edits.
 //!
 //! There is no notion of "layers" or "kinds" here: any component (filesystem
 //! driver, archive driver, network driver, ...) builds [`Tree`]s of
@@ -21,17 +20,15 @@ pub mod changeset;
 pub mod diff;
 pub mod node;
 pub mod overlay;
-pub mod queue;
 pub mod tree;
 
 pub use attr::{AttrMap, AttrName, AttrValue};
 pub use changeset::{AddOp, Changeset, DeleteOp, ModifyOp, RenameOp};
 pub use node::{NodeId, VfsNode, next_node_id};
 pub use overlay::{DirtyState, Overlay, OverlayError};
-pub use queue::{EditOperation, EditQueue, EditTransaction};
 pub use tree::Tree;
 
-/// Backwards-compatible alias used by the edit queue and existing code.
+/// Backwards-compatible alias for [`NodeId`].
 pub type VfsNodeId = NodeId;
 
 /// Backwards-compatible alias for [`next_node_id`].

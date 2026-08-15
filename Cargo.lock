@@ -267,10 +267,6 @@ name = "app_constants"
 version = "0.1.0"
 
 [[package]]
-name = "app_env"
-version = "0.1.0"
-
-[[package]]
 name = "ar_archive_writer"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6615,32 +6611,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "vfs",
-]
-
-[[package]]
-name = "settings"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "collections",
- "futures",
- "gpui",
- "inventory",
- "log",
- "schemars",
- "serde",
- "serde_json",
- "settings_macros",
- "strum",
-]
-
-[[package]]
-name = "settings_macros"
-version = "0.1.0"
-dependencies = [
- "quote",
- "settings",
- "syn 2.0.119",
 ]
 
 [[package]]
