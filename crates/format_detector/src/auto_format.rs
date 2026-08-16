@@ -1,5 +1,6 @@
 
 use file_format::FileFormat;
+use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use crate::archive_format::{ArchiveFormat, ALL_FORMATS};
@@ -60,14 +61,16 @@ impl AutoFormat {
     }
 
     pub fn detect(&self, path: &Path) -> Result<Detection, DetectionError> {
-        let header = std::fs::read(path)?;
-        let data = &header[..header.len().min(1024)];
-
-        let ff = file_format::FileFormat::from_bytes(data);
+        let mut file = std::fs::File::open(path)?;
+        let ff = file_format::FileFormat::from_reader(&mut file)?;
         let physical =
             file_format_to_archive_format(ff).ok_or_else(|| DetectionError::UnknownFormat {
                 path: path.to_path_buf(),
             })?;
+
+        file.seek(std::io::SeekFrom::Start(0))?;
+        let mut data = Vec::new();
+        file.take(1024).read_to_end(&mut data)?;
 
         let ext_str = path.to_string_lossy().to_lowercase();
         let extensions = parse_extensions(&ext_str);
@@ -78,7 +81,10 @@ impl AutoFormat {
             .or_else(|| physical.inner_format());
 
         let is_multi_volume = extensions.iter().any(|e| {
-            e.ends_with(".001") || e.ends_with(".002") || (e.starts_with('r') && e.len() == 3)
+            matches!(e.as_str(), "001" | "002")
+                || (e.len() == 3
+                    && e.starts_with('r')
+                    && e[1..].bytes().all(|b| b.is_ascii_digit()))
         });
 
         if let Some(logical) = logical {
@@ -91,7 +97,7 @@ impl AutoFormat {
         }
 
         let validated = if let Some(registry) = &self.validators {
-            registry.validate(physical, path, data).is_ok()
+            registry.validate(physical, path, &data).is_ok()
         } else {
             false
         };
@@ -203,14 +209,10 @@ fn file_format_to_archive_format(ff: FileFormat) -> Option<ArchiveFormat> {
 fn parse_extensions(path: &str) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     let mut current = path.to_string();
-    loop {
-        if let Some(idx) = current.rfind('.') {
-            let ext = current[idx..].to_string();
-            parts.push(ext.trim_start_matches('.').to_string());
-            current = current[..idx].to_string();
-        } else {
-            break;
-        }
+    while let Some(idx) = current.rfind('.') {
+        let ext = current[idx..].to_string();
+        parts.push(ext.trim_start_matches('.').to_string());
+        current = current[..idx].to_string();
     }
     // Extensions are collected right-to-left, reverse for logical order
     parts.reverse();
@@ -256,5 +258,62 @@ impl From<DetectionError> for DetectError {
             DetectionError::Io(err) => DetectError::Io(err),
             _ => DetectError::UnknownFormat,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_header(dir: &Path, name: &str, magic: &[u8], tail_padding: usize) -> PathBuf {
+        let path = dir.join(name);
+        let mut bytes = magic.to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, tail_padding));
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    const SEVEN_ZIP: &[u8] = b"7z\xbc\xaf\x27\x1c";
+    const RAR4: &[u8] = b"Rar!\x1a\x07\x00";
+    const GZIP: &[u8] = &[0x1f, 0x8b];
+
+    #[test]
+    fn split_volume_001_is_multi_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_header(dir.path(), "archive.7z.001", SEVEN_ZIP, 64);
+        let detection = AutoFormat::new().detect(&path).unwrap();
+        assert!(detection.is_multi_volume);
+        assert_eq!(detection.format, ArchiveFormat::SevenZip);
+    }
+
+    #[test]
+    fn plain_rar_is_not_multi_volume() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_header(dir.path(), "archive.rar", RAR4, 64);
+        let detection = AutoFormat::new().detect(&path).unwrap();
+        assert!(!detection.is_multi_volume);
+    }
+
+    #[test]
+    fn tar_gz_resolves_compound_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_header(dir.path(), "archive.tar.gz", GZIP, 64);
+        let detection = AutoFormat::new().detect(&path).unwrap();
+        assert_eq!(detection.format, ArchiveFormat::GZip);
+        assert_eq!(detection.logical, Some(ArchiveFormat::TarGz));
+        assert_eq!(detection.inner, Some(ArchiveFormat::Tar));
+    }
+
+    #[test]
+    fn large_file_detects_from_header_without_reading_it_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut bytes = vec![0x50u8, 0x4b, 0x03, 0x04];
+        bytes.extend(std::iter::repeat_n(0u8, 4 << 20));
+        bytes.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+        bytes.extend(std::iter::repeat_n(0u8, 18));
+        let path = dir.path().join("big.zip");
+        std::fs::write(&path, bytes).unwrap();
+        let detection = AutoFormat::new().detect(&path).unwrap();
+        assert_eq!(detection.format, ArchiveFormat::Zip);
     }
 }

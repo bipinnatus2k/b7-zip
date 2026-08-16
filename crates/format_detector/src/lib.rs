@@ -1,14 +1,16 @@
 //! Archive format detection by magic bytes and file extension.
 //!
-//! A small leaf component with no dependencies. Returns a generic
-//! [`ArchiveFormat`] identifier that other components (engine, session,
-//! task) map to their own format types.
+//! Detection is powered by the `file_format` crate; results are reported as
+//! the generic [`ArchiveFormat`] identifier that other components (engine,
+//! session, task) map to their own format types.
 
-mod format_detector;
-pub(crate) mod validator;
-mod validators;
-mod auto_format;
 mod archive_format;
+mod auto_format;
+mod format_detector;
+pub mod validator;
+pub mod validators;
 
-#[cfg(test)]
-mod tests {}
+pub use archive_format::{ALL_FORMATS, ArchiveFormat};
+pub use auto_format::{AutoFormat, Detection, DetectionError};
+pub use format_detector::{DetectError, FormatDetector};
+pub use validator::{FormatValidator, ValidatorRegistry};

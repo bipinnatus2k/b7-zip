@@ -25,7 +25,6 @@ gpui.workspace = true
 gpui_platform.workspace = true
 assets.workspace = true
 
-
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { version = "0.15", features = ["xdg-portal", "async-std"] }
 
