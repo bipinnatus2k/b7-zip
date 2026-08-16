@@ -12,10 +12,9 @@ members = [
     "crates/crashes",
     "crates/explorer",
     "crates/ffi",
-    "crates/fs",
     "crates/format_detector",
+    "crates/fs",
     "crates/fs_watcher",
-    "executor",
     "crates/password",
     "crates/paths",
     "crates/session",
@@ -24,14 +23,13 @@ members = [
     "crates/task",
     "crates/temp",
     "crates/thirdparties/gpui-tray",
+    "crates/thirdparties/guise/crates/guise",
     "crates/tray",
     "crates/vfs",
-    "crates/thirdparties/guise/crates/guise"
+    "executor",
 ]
 
-exclude = [
-    "crates/thirdparties/guise"
-]
+exclude = ["crates/thirdparties/guise"]
 default-members = ["app"]
 
 [workspace.package]
@@ -42,7 +40,7 @@ version = "0.1.0"
 authors = []
 homepage = ""
 documentation = ""
-keywords = ["archive","7-zip"]
+keywords = ["archive", "7-zip"]
 categories = []
 repository = ""
 
@@ -52,18 +50,26 @@ app_constants = { path = "crates/app_constants" }
 archive_vfs = { path = "crates/archive_vfs" }
 assets = { path = "crates/assets" }
 async-process = "2.5.0"
+async-trait = "*"
+bit7z-explorer = { path = "crates/explorer" }
 bit7z-ffi = { path = "crates/ffi" }
 bit7z-rs = { path = "crates/bit7z" }
+checksum = { path = "crates/checksum" }
 clap = { version = "4", features = ["derive"] }
 const_format = "0.2"
 crash-handler = "0.7"
-checksum = { path = "crates/checksum" }
 dirs = "6.0"
-bit7z-explorer = { path = "crates/explorer" }
+features = { version = "0.10" }
+fs = { path = "crates/fs" }
+fs_watcher = { path = "crates/fs_watcher" }
+futures = "0.3"
+futures-concurrency = "7"
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
+guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
 human_bytes = "0.4.3"
 ignore = "0.4.22"
+inventory = "0.3"
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
 log = "0.4.33"
@@ -71,23 +77,21 @@ mach2 = "0.5"
 minidumper = "0.9"
 parking_lot = "0.12.5"
 password = { path = "crates/password" }
-session = { path = "crates/session" }
 pciid-parser = "0.8.1"
+rfd = { version = "0.15", default-features = false }
 rust-embed = { version = "8.11", features = ["include-exclude"] }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
+session = { path = "crates/session" }
+smol = "2.0"
 sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
 task = { path = "crates/task" }
 temp = { path = "crates/temp" }
 thiserror = "2.0.19"
-vfs = { path = "crates/vfs" }
-fs = { path = "crates/fs" }
-fs_watcher = { path = "crates/fs_watcher" }
-guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
-rfd = { version = "0.15", default-features = false }
 util = { git = "https://github.com/zed-industries/zed" }
+vfs = { path = "crates/vfs" }
 zstd = "0.11"
 
 [workspace.dependencies.windows]
@@ -175,6 +179,6 @@ useless_conversion = "allow"
 zed-scap = { path = "crates/thirdparties/scap" }
 
 [patch.crates-io]
-gpui = { git = "https://github.com/zed-industries/zed" , features = ["x11","wayland","font-kit"]}
+gpui = { git = "https://github.com/zed-industries/zed", features = ["x11", "wayland", "font-kit"] }
 quick-xml = { git = "https://github.com/tafia/quick-xml", tag = "v0.41.0", version = "0.41.0" }
 

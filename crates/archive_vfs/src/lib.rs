@@ -10,30 +10,67 @@ use bit7z_rs::ArchiveEntry;
 use std::collections::HashMap;
 use vfs::{AttrValue, Tree, VfsNode, next_node_id};
 
-/// Build a tree from archive entries, synthesizing missing directory nodes.
-pub fn build_tree(entries: &[ArchiveEntry]) -> Tree {
-    let root_id = next_node_id();
-    let mut tree = Tree::new(root_id);
-    let mut path_map: HashMap<String, vfs::NodeId> = HashMap::new();
+/// Builder that incrementally assembles a [`Tree`] from archive entries,
+/// synthesizing missing directory nodes.
+pub struct TreeBuilder {
+    tree: Tree,
+    path_map: HashMap<String, vfs::NodeId>,
+    root_id: vfs::NodeId,
+}
 
-    tree.insert_node(VfsNode::new(root_id, None, "", true))
-        .expect("fresh tree accepts root");
-    path_map.insert(String::new(), root_id);
+impl TreeBuilder {
+    /// Start a fresh tree with the synthesized root directory.
+    pub fn new() -> Self {
+        let root_id = next_node_id();
+        let mut tree = Tree::new(root_id);
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
+            .expect("fresh tree accepts root");
+        let mut path_map = HashMap::new();
+        path_map.insert(String::new(), root_id);
+        Self {
+            tree,
+            path_map,
+            root_id,
+        }
+    }
 
-    for entry in entries {
+    /// Add a single archive entry to the tree.
+    pub fn add_entry(mut self, entry: &ArchiveEntry) -> Self {
+        self.insert_entry(entry);
+        self
+    }
+
+    /// Add several archive entries to the tree.
+    pub fn add_entries(mut self, entries: &[ArchiveEntry]) -> Self {
+        for entry in entries {
+            self.insert_entry(entry);
+        }
+        self
+    }
+
+    /// Consume the builder and produce the finished tree.
+    pub fn build(self) -> Tree {
+        self.tree
+    }
+
+    fn insert_entry(&mut self, entry: &ArchiveEntry) {
         let normalized = entry.path.trim_end_matches('/').replace('\\', "/");
         let parent_path = parent_of(&normalized);
-        let parent_id = ensure_dir(&mut tree, &mut path_map, &parent_path, root_id);
+        let parent_id = ensure_dir(&mut self.tree, &mut self.path_map, &parent_path, self.root_id);
 
         let node_id = next_node_id();
         let name = normalized.rsplit('/').next().unwrap_or(&normalized).to_string();
         let mut node = VfsNode::new(node_id, Some(parent_id), name, entry.is_directory);
         fill_attrs(&mut node, entry);
-        if tree.insert_node(node).is_ok() {
-            path_map.insert(normalized, node_id);
+        if self.tree.insert_node(node).is_ok() {
+            self.path_map.insert(normalized, node_id);
         }
     }
-    tree
+}
+
+/// Build a tree from archive entries in a single call.
+pub fn build_tree(entries: &[ArchiveEntry]) -> Tree {
+    TreeBuilder::new().add_entries(entries).build()
 }
 
 fn fill_attrs(node: &mut VfsNode, entry: &ArchiveEntry) {

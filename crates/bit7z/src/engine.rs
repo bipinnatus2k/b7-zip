@@ -41,13 +41,47 @@ impl ArchiveEntry {
     /// Build a directory placeholder entry (used by listers that synthesize
     /// directory nodes from file paths).
     pub fn directory(index: u32, name: impl Into<String>, path: impl Into<String>) -> Self {
+        ArchiveEntryBuilder::new(index, name, path).dir().build()
+    }
+}
+
+/// Builder for [`ArchiveEntry`], providing ergonomic construction of the
+/// many optional fields.
+pub struct ArchiveEntryBuilder {
+    index: u32,
+    name: String,
+    path: String,
+    size: u64,
+    packed_size: u64,
+    is_directory: bool,
+    is_encrypted: bool,
+    is_symlink: bool,
+    crc: Option<u32>,
+    modified: Option<jiff::civil::DateTime>,
+    created: Option<jiff::civil::DateTime>,
+    accessed: Option<jiff::civil::DateTime>,
+    attributes: Option<u32>,
+    posix_attrib: Option<u32>,
+    host_os: Option<u8>,
+    compression_method: Option<String>,
+    comment: Option<String>,
+    user: Option<String>,
+    group: Option<String>,
+    extension: Option<String>,
+    hardlink: Option<String>,
+}
+
+impl ArchiveEntryBuilder {
+    /// Begin building an entry at `path`. `name` defaults to the last path
+    /// component and `size`/`packed_size` default to zero.
+    pub fn new(index: u32, name: impl Into<String>, path: impl Into<String>) -> Self {
         Self {
             index,
             name: name.into(),
             path: path.into(),
             size: 0,
             packed_size: 0,
-            is_directory: true,
+            is_directory: false,
             is_encrypted: false,
             is_symlink: false,
             crc: None,
@@ -63,6 +97,124 @@ impl ArchiveEntry {
             group: None,
             extension: None,
             hardlink: None,
+        }
+    }
+
+    /// Mark the entry as a directory.
+    pub fn dir(mut self) -> Self {
+        self.is_directory = true;
+        self
+    }
+
+    pub fn size(mut self, size: u64) -> Self {
+        self.size = size;
+        self
+    }
+
+    pub fn packed_size(mut self, packed_size: u64) -> Self {
+        self.packed_size = packed_size;
+        self
+    }
+
+    pub fn encrypted(mut self) -> Self {
+        self.is_encrypted = true;
+        self
+    }
+
+    pub fn symlink(mut self) -> Self {
+        self.is_symlink = true;
+        self
+    }
+
+    pub fn crc(mut self, crc: u32) -> Self {
+        self.crc = Some(crc);
+        self
+    }
+
+    pub fn modified(mut self, value: jiff::civil::DateTime) -> Self {
+        self.modified = Some(value);
+        self
+    }
+
+    pub fn created(mut self, value: jiff::civil::DateTime) -> Self {
+        self.created = Some(value);
+        self
+    }
+
+    pub fn accessed(mut self, value: jiff::civil::DateTime) -> Self {
+        self.accessed = Some(value);
+        self
+    }
+
+    pub fn attributes(mut self, value: u32) -> Self {
+        self.attributes = Some(value);
+        self
+    }
+
+    pub fn posix_attrib(mut self, value: u32) -> Self {
+        self.posix_attrib = Some(value);
+        self
+    }
+
+    pub fn host_os(mut self, value: u8) -> Self {
+        self.host_os = Some(value);
+        self
+    }
+
+    pub fn compression_method(mut self, value: impl Into<String>) -> Self {
+        self.compression_method = Some(value.into());
+        self
+    }
+
+    pub fn comment(mut self, value: impl Into<String>) -> Self {
+        self.comment = Some(value.into());
+        self
+    }
+
+    pub fn user(mut self, value: impl Into<String>) -> Self {
+        self.user = Some(value.into());
+        self
+    }
+
+    pub fn group(mut self, value: impl Into<String>) -> Self {
+        self.group = Some(value.into());
+        self
+    }
+
+    pub fn extension(mut self, value: impl Into<String>) -> Self {
+        self.extension = Some(value.into());
+        self
+    }
+
+    pub fn hardlink(mut self, value: impl Into<String>) -> Self {
+        self.hardlink = Some(value.into());
+        self
+    }
+
+    /// Consume the builder and produce the entry.
+    pub fn build(self) -> ArchiveEntry {
+        ArchiveEntry {
+            index: self.index,
+            name: self.name,
+            path: self.path,
+            size: self.size,
+            packed_size: self.packed_size,
+            is_directory: self.is_directory,
+            is_encrypted: self.is_encrypted,
+            is_symlink: self.is_symlink,
+            crc: self.crc,
+            modified: self.modified,
+            created: self.created,
+            accessed: self.accessed,
+            attributes: self.attributes,
+            posix_attrib: self.posix_attrib,
+            host_os: self.host_os,
+            compression_method: self.compression_method,
+            comment: self.comment,
+            user: self.user,
+            group: self.group,
+            extension: self.extension,
+            hardlink: self.hardlink,
         }
     }
 }
