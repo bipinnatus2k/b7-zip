@@ -1,5 +1,6 @@
 use super::{VfsError, VfsNode, VfsNodeId, next_vfs_id};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct Tree {
@@ -64,12 +65,19 @@ impl Tree {
     pub fn path_of(&self, node_id: VfsNodeId) -> Option<String> {
         let mut parts = Vec::new();
         let mut current = node_id;
+        let mut seen = HashSet::new();
         loop {
+            if !seen.insert(current) {
+                return None; // cycle or repeated parent chain
+            }
             let node = self.nodes.get(&current)?;
             if let Some(parent) = node.parent {
                 parts.push(node.name.clone());
                 current = parent;
             } else {
+                if current != self.root {
+                    return None;
+                }
                 break;
             }
         }
@@ -78,6 +86,19 @@ impl Tree {
     }
 
     pub fn insert_node(&mut self, node: VfsNode) -> Result<(), VfsError> {
+        self.insert_node_inner(node, false)
+    }
+
+    /// Insert a node while allowing a sibling with the same name.
+    ///
+    /// Archive listings may legitimately contain duplicate paths. Path
+    /// lookup remains ambiguous (the first matching child wins), but the
+    /// entry is no longer silently lost.
+    pub fn insert_node_allow_duplicate(&mut self, node: VfsNode) -> Result<(), VfsError> {
+        self.insert_node_inner(node, true)
+    }
+
+    fn insert_node_inner(&mut self, node: VfsNode, allow_duplicate: bool) -> Result<(), VfsError> {
         let id = node.id;
         let parent = node.parent;
         let name = node.name.clone();
@@ -85,13 +106,22 @@ impl Tree {
             return Err(VfsError::AlreadyExists(name));
         }
         if let Some(pid) = parent {
-            let siblings = self.children.entry(Some(pid)).or_default();
-            if siblings
-                .iter()
-                .any(|&sid| self.nodes.get(&sid).map(|n| n.name.as_str()) == Some(&name))
-            {
-                return Err(VfsError::AlreadyExists(name));
+            if !self.nodes.contains_key(&pid) {
+                return Err(VfsError::NodeNotFound(pid));
             }
+            if !allow_duplicate {
+                let siblings = self.children.entry(Some(pid)).or_default();
+                if siblings
+                    .iter()
+                    .any(|&sid| self.nodes.get(&sid).map(|n| n.name.as_str()) == Some(&name))
+                {
+                    return Err(VfsError::AlreadyExists(name));
+                }
+            }
+        } else if id != self.root {
+            return Err(VfsError::Internal(
+                "only the tree root may have no parent".into(),
+            ));
         }
         self.nodes.insert(id, node);
         self.children.entry(parent).or_default().push(id);
@@ -99,35 +129,92 @@ impl Tree {
     }
 
     pub fn rename_node(&mut self, node_id: VfsNodeId, new_name: &str) -> Result<String, VfsError> {
-        let node = self
-            .nodes
-            .get_mut(&node_id)
-            .ok_or(VfsError::NodeNotFound(node_id))?;
-        let old_name = std::mem::replace(&mut node.name, new_name.to_string());
+        self.reparent_node(node_id, None, new_name)
+    }
+
+    /// Rename `node_id` and, when `new_parent` is supplied, move it under a
+    /// different parent.
+    pub fn reparent_node(
+        &mut self,
+        node_id: VfsNodeId,
+        new_parent: Option<VfsNodeId>,
+        new_name: &str,
+    ) -> Result<String, VfsError> {
+        let (old_name, old_parent) = {
+            let node = self
+                .nodes
+                .get(&node_id)
+                .ok_or(VfsError::NodeNotFound(node_id))?;
+            (node.name.clone(), node.parent)
+        };
+        let new_parent = new_parent.or(old_parent);
+        if let Some(pid) = new_parent {
+            if !self.nodes.contains_key(&pid) {
+                return Err(VfsError::NodeNotFound(pid));
+            }
+            if pid != node_id
+                && let Some(siblings) = self.children.get(&Some(pid))
+                && siblings.iter().any(|&sid| {
+                    sid != node_id
+                        && self.nodes.get(&sid).map(|n| n.name.as_str()) == Some(new_name)
+                })
+            {
+                return Err(VfsError::AlreadyExists(new_name.to_string()));
+            }
+        } else if node_id != self.root {
+            return Err(VfsError::Internal(
+                "only the tree root may have no parent".into(),
+            ));
+        }
+
+        if old_parent != new_parent {
+            if let Some(pid) = old_parent
+                && let Some(siblings) = self.children.get_mut(&Some(pid))
+            {
+                siblings.retain(|&sid| sid != node_id);
+            }
+            self.children.entry(new_parent).or_default().push(node_id);
+        }
+        let node = self.nodes.get_mut(&node_id).expect("node checked above");
+        node.parent = new_parent;
+        node.name = new_name.to_string();
         Ok(old_name)
     }
 
     pub fn remove_node(&mut self, node_id: VfsNodeId) -> Result<VfsNode, VfsError> {
         let node = self
             .nodes
-            .remove(&node_id)
+            .get(&node_id)
+            .cloned()
             .ok_or(VfsError::NodeNotFound(node_id))?;
-        if let Some(parent) = node.parent
-            && let Some(siblings) = self.children.get_mut(&Some(parent))
-        {
-            siblings.retain(|&id| id != node_id);
-        }
-        if let Some(kids) = self.children.remove(&Some(node_id)) {
-            for kid in &kids {
-                self.nodes.remove(kid);
+        self.remove_subtree(node_id);
+        Ok(node)
+    }
+
+    /// Remove `node_id` and every descendant, including their `children`
+    /// bookkeeping, so no orphan nodes or stale child lists remain.
+    fn remove_subtree(&mut self, node_id: VfsNodeId) {
+        let mut stack = vec![node_id];
+        while let Some(id) = stack.pop() {
+            let Some(node) = self.nodes.remove(&id) else {
+                continue;
+            };
+            if let Some(parent) = node.parent
+                && let Some(siblings) = self.children.get_mut(&Some(parent))
+            {
+                siblings.retain(|&sid| sid != id);
+            }
+            if let Some(kids) = self.children.remove(&Some(id)) {
+                stack.extend(kids);
             }
         }
-        Ok(node)
     }
 
     /// Return all node paths sorted.
     pub fn all_paths(&self) -> Vec<String> {
-        let mut paths: Vec<String> = self.nodes.keys()
+        let mut paths: Vec<String> = self
+            .nodes
+            .keys()
             .filter_map(|&id| self.path_of(id))
             .collect();
         paths.sort();
@@ -150,6 +237,83 @@ impl Tree {
 impl Default for Tree {
     fn default() -> Self {
         Self::new(next_vfs_id())
+    }
+}
+
+fn fmt_attr_value(f: &mut fmt::Formatter<'_>, v: &crate::AttrValue) -> fmt::Result {
+    match v {
+        crate::AttrValue::String(s) => write!(f, "{s:?}"),
+        crate::AttrValue::UInt(n) => write!(f, "{n}"),
+        crate::AttrValue::Int(n) => write!(f, "{n}"),
+        crate::AttrValue::Bool(b) => write!(f, "{b}"),
+        crate::AttrValue::DateTime(dt) => write!(f, "{dt}"),
+        crate::AttrValue::Bytes(b) => write!(f, "<{} bytes>", b.len()),
+    }
+}
+
+impl fmt::Display for Tree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn write_node(
+            tree: &Tree,
+            id: VfsNodeId,
+            prefix: &str,
+            is_last: bool,
+            f: &mut fmt::Formatter<'_>,
+        ) -> fmt::Result {
+            let node = match tree.node(id) {
+                Some(n) => n,
+                None => return Ok(()),
+            };
+
+            let connector = if is_last { "└── " } else { "├── " };
+            let kind = if node.is_directory { "/" } else { "" };
+
+            writeln!(f, "{prefix}{connector}{}{} [id={},dir={}]", node.name, kind, id.as_u64(),node.is_directory)?;
+
+            let attrs = &node.attrs;
+            let attr_count = attrs.len();
+            if attr_count > 0 {
+                let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
+                let mut sorted_attrs: Vec<_> = attrs.iter().collect();
+                sorted_attrs.sort_by_key(|(k, _)| k.as_str());
+                for (i, (k, v)) in sorted_attrs.iter().enumerate() {
+                    let attr_connector = if i + 1 == attr_count { "└── " } else { "├── " };
+                    write!(f, "{child_prefix}{attr_connector}{k}=")?;
+                    fmt_attr_value(f, v)?;
+                    writeln!(f)?;
+                }
+            }
+
+            let children = tree.children(id).unwrap_or(&[]);
+            let child_count = children.len();
+            for (i, &child_id) in children.iter().enumerate() {
+                let new_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
+                write_node(tree, child_id, &new_prefix, i + 1 == child_count, f)?;
+            }
+            Ok(())
+        }
+
+        writeln!(f, "/ [id={}]", self.root().as_u64())?;
+        if let Some(root_node) = self.node(self.root()) {
+            let attrs = &root_node.attrs;
+            let attr_count = attrs.len();
+            if attr_count > 0 {
+                let mut sorted_attrs: Vec<_> = attrs.iter().collect();
+                sorted_attrs.sort_by_key(|(k, _)| k.as_str());
+                for (i, (k, v)) in sorted_attrs.iter().enumerate() {
+                    let attr_connector = if i + 1 == attr_count { "└── " } else { "├── " };
+                    write!(f, "{attr_connector}{k}=")?;
+                    fmt_attr_value(f, v)?;
+                    writeln!(f)?;
+                }
+            }
+        }
+        let children = self.children(self.root()).unwrap_or(&[]);
+        let child_count = children.len();
+        for (i, &child_id) in children.iter().enumerate() {
+            write_node(self, child_id, "", i + 1 == child_count, f)?;
+        }
+        Ok(())
     }
 }
 
@@ -244,7 +408,7 @@ mod tests {
         let child = make_node("file.txt", Some(root_id), false);
         let child_id = child.id;
         tree.insert_node(child).unwrap();
-
+        println!("{}", tree);
         assert_eq!(tree.resolve_path("file.txt"), Some(child_id));
     }
 
@@ -253,7 +417,7 @@ mod tests {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
         tree.insert_node(VfsNode::new(root_id, None, "", true))
-        .unwrap();
+            .unwrap();
 
         let dir = make_node("dir", Some(root_id), true);
         let dir_id = dir.id;
@@ -262,7 +426,7 @@ mod tests {
         let file = make_node("inner.txt", Some(dir_id), false);
         let file_id = file.id;
         tree.insert_node(file).unwrap();
-
+        println!("{}", tree);
         assert_eq!(tree.resolve_path("dir/inner.txt"), Some(file_id));
         assert_eq!(tree.resolve_path("dir"), Some(dir_id));
     }
@@ -272,13 +436,14 @@ mod tests {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
         tree.insert_node(VfsNode::new(root_id, None, "", true))
-        .unwrap();
+            .unwrap();
 
         let file = make_node("old.txt", Some(root_id), false);
         let file_id = file.id;
         tree.insert_node(file).unwrap();
+        println!("{}", tree);
         tree.rename_node(file_id, "new.txt").unwrap();
-
+        println!("{}", tree);
         assert_eq!(tree.node(file_id).unwrap().name, "new.txt");
         assert!(tree.resolve_path("old.txt").is_none());
         assert_eq!(tree.resolve_path("new.txt"), Some(file_id));
@@ -289,7 +454,7 @@ mod tests {
         let root_id = next_vfs_id();
         let mut tree = Tree::new(root_id);
         tree.insert_node(VfsNode::new(root_id, None, "", true))
-        .unwrap();
+            .unwrap();
 
         let file = make_node("delete_me.txt", Some(root_id), false);
         let file_id = file.id;
@@ -344,5 +509,49 @@ mod tests {
 
         dt.clear_all();
         assert!(!dt.has_changes());
+    }
+}
+
+#[cfg(test)]
+mod integrity_tests {
+    use super::*;
+
+    #[test]
+    fn remove_node_drops_the_whole_subtree() {
+        let root_id = next_vfs_id();
+        let mut tree = Tree::new(root_id);
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
+            .unwrap();
+
+        let dir = next_vfs_id();
+        tree.insert_node(VfsNode::new(dir, Some(root_id), "dir", true))
+            .unwrap();
+        let inner = next_vfs_id();
+        tree.insert_node(VfsNode::new(inner, Some(dir), "inner", true))
+            .unwrap();
+        let leaf = next_vfs_id();
+        tree.insert_node(VfsNode::new(leaf, Some(inner), "leaf.txt", false))
+            .unwrap();
+
+        tree.remove_node(dir).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert!(tree.node(inner).is_none());
+        assert!(tree.node(leaf).is_none());
+        assert_eq!(tree.all_paths(), vec![""]);
+    }
+
+    #[test]
+    fn insert_rejects_missing_parent() {
+        let root_id = next_vfs_id();
+        let mut tree = Tree::new(root_id);
+        tree.insert_node(VfsNode::new(root_id, None, "", true))
+            .unwrap();
+
+        let missing = next_vfs_id();
+        let orphan = VfsNode::new(next_vfs_id(), Some(missing), "orphan", false);
+        assert!(matches!(
+            tree.insert_node(orphan),
+            Err(VfsError::NodeNotFound(_))
+        ));
     }
 }

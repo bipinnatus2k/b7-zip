@@ -100,7 +100,20 @@ impl Overlay {
             if let Some(existing_id) = self.working.resolve_path(&path) {
                 let changed = apply_source_attrs(&mut self.working, existing_id, &node);
                 if changed {
-                    self.dirty.entry(existing_id).or_insert(DirtyState::Modified);
+                    match self.dirty.get(&existing_id).copied() {
+                        Some(DirtyState::Added | DirtyState::Renamed) => {}
+                        Some(DirtyState::Deleted) => {
+                            let state = if self.base.node(existing_id).is_some() {
+                                DirtyState::Modified
+                            } else {
+                                DirtyState::Added
+                            };
+                            self.dirty.insert(existing_id, state);
+                        }
+                        _ => {
+                            self.dirty.insert(existing_id, DirtyState::Modified);
+                        }
+                    }
                 }
             } else if let Some(parent_path) = parent_of(&path)
                 && let Some(parent_id) = self.working.resolve_path(&parent_path)
@@ -129,8 +142,15 @@ impl Overlay {
         let Some(id) = self.working.resolve_path(path) else {
             return false;
         };
+        let existed_in_base = self.base.node(id).is_some();
         if self.working.remove_node(id).is_ok() {
-            self.dirty.insert(id, DirtyState::Deleted);
+            if existed_in_base {
+                self.dirty.insert(id, DirtyState::Deleted);
+            } else {
+                // Removing a node that was added in this overlay cancels the
+                // addition instead of producing an un-mappable Delete op.
+                self.dirty.remove(&id);
+            }
             return true;
         }
         false
@@ -138,9 +158,21 @@ impl Overlay {
 
     /// Rename the node at `from` to `to` (both relative paths).
     pub fn rename_path(&mut self, from: &str, to: &str) -> Result<(), OverlayError> {
-        let id = self.working.resolve_path(from).ok_or(OverlayError::NotFound(from.to_string()))?;
+        let id = self
+            .working
+            .resolve_path(from)
+            .ok_or(OverlayError::NotFound(from.to_string()))?;
         let new_name = to.rsplit('/').next().unwrap_or(to).to_string();
-        self.working.rename_node(id, &new_name).map_err(|e| OverlayError::Tree(e.to_string()))?;
+        let new_parent_id = match parent_of(to) {
+            Some(parent) => self
+                .working
+                .resolve_path(&parent)
+                .ok_or_else(|| OverlayError::NotFound(parent))?,
+            None => self.working.root(),
+        };
+        self.working
+            .reparent_node(id, Some(new_parent_id), &new_name)
+            .map_err(|e| OverlayError::Tree(e.to_string()))?;
         self.dirty.insert(id, DirtyState::Renamed);
         Ok(())
     }
@@ -169,16 +201,32 @@ fn apply_source_attrs(working: &mut Tree, id: NodeId, source: &VfsNode) -> bool 
     // Only compare attributes that *both* sides provide: a source without
     // an attribute (e.g. an fs tree that did not populate mtime) is not a
     // change signal.
-    let size_changed = match (existing.attr(crate::attr::SIZE), source.attr(crate::attr::SIZE)) {
+    let size_changed = match (
+        existing.attr(crate::attr::SIZE),
+        source.attr(crate::attr::SIZE),
+    ) {
         (Some(a), Some(b)) => a != b,
         _ => false,
     };
-    let mtime_changed = match (existing.attr(crate::attr::MODIFIED), source.attr(crate::attr::MODIFIED)) {
+    let mtime_changed = match (
+        existing.attr(crate::attr::MODIFIED),
+        source.attr(crate::attr::MODIFIED),
+    ) {
         (Some(a), Some(b)) => a != b,
         _ => false,
     };
-    let changed = size_changed || mtime_changed;
-    working.node_mut(id).expect("node exists").merge_attrs(source);
+    let crc_changed = match (
+        existing.attr(crate::attr::CRC),
+        source.attr(crate::attr::CRC),
+    ) {
+        (Some(a), Some(b)) => a != b,
+        _ => false,
+    };
+    let changed = size_changed || mtime_changed || crc_changed;
+    working
+        .node_mut(id)
+        .expect("node exists")
+        .merge_attrs(source);
     changed
 }
 
@@ -208,7 +256,8 @@ mod tests {
     fn sample_base() -> Tree {
         let mut tree = Tree::new(next_node_id());
         let root = tree.root();
-        tree.insert_node(VfsNode::new(root, None, "", true)).unwrap();
+        tree.insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
 
         let mut dir = VfsNode::new(next_node_id(), Some(root), "dir", true);
         let dir_id = dir.id;
@@ -238,7 +287,9 @@ mod tests {
         let mut overlay = Overlay::new(sample_base());
         let mut fs_tree = Tree::new(next_node_id());
         let root = fs_tree.root();
-        fs_tree.insert_node(VfsNode::new(root, None, "", true)).unwrap();
+        fs_tree
+            .insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
         let mut extra = VfsNode::new(next_node_id(), Some(root), "extra.txt", false);
         extra.set_attr(attr::SIZE, AttrValue::UInt(10));
         fs_tree.insert_node(extra.clone()).unwrap();
@@ -253,7 +304,9 @@ mod tests {
         let mut overlay = Overlay::new(sample_base());
         let mut fs_tree = Tree::new(next_node_id());
         let root = fs_tree.root();
-        fs_tree.insert_node(VfsNode::new(root, None, "", true)).unwrap();
+        fs_tree
+            .insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
         let mut changed = VfsNode::new(next_node_id(), Some(root), "a.txt", false);
         changed.set_attr(attr::SIZE, AttrValue::UInt(200));
         fs_tree.insert_node(changed).unwrap();
@@ -262,7 +315,15 @@ mod tests {
         let id = overlay.working().resolve_path("a.txt").unwrap();
         assert_eq!(overlay.dirty_state(id), Some(DirtyState::Modified));
         // Working node picked up the new size.
-        assert_eq!(overlay.working().node(id).unwrap().attr(attr::SIZE).and_then(|v| v.as_u64()), Some(200));
+        assert_eq!(
+            overlay
+                .working()
+                .node(id)
+                .unwrap()
+                .attr(attr::SIZE)
+                .and_then(|v| v.as_u64()),
+            Some(200)
+        );
     }
 
     #[test]
@@ -270,7 +331,9 @@ mod tests {
         let mut overlay = Overlay::new(sample_base());
         let mut fs_tree = Tree::new(next_node_id());
         let root = fs_tree.root();
-        fs_tree.insert_node(VfsNode::new(root, None, "", true)).unwrap();
+        fs_tree
+            .insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
         let same = VfsNode::new(next_node_id(), Some(root), "a.txt", false);
         fs_tree.insert_node(same).unwrap();
         overlay.sync_from(&fs_tree);
