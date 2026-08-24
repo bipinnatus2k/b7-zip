@@ -1,11 +1,9 @@
-
-use file_format::FileFormat;
-use std::io::{Read, Seek};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use crate::archive_format::{ArchiveFormat, ALL_FORMATS};
+use crate::archive_format::{ALL_FORMATS, ArchiveFormat};
 use crate::format_detector::{DetectError, FormatDetector};
 use crate::validator::ValidatorRegistry;
+use file_format::FileFormat;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Result of detecting and validating an archive file.
 #[derive(Debug, Clone)]
@@ -68,17 +66,11 @@ impl AutoFormat {
                 path: path.to_path_buf(),
             })?;
 
-        file.seek(std::io::SeekFrom::Start(0))?;
-        let mut data = Vec::new();
-        file.take(1024).read_to_end(&mut data)?;
-
         let ext_str = path.to_string_lossy().to_lowercase();
         let extensions = parse_extensions(&ext_str);
 
         let logical = resolve_logical_format(&extensions);
-        let inner = logical
-            .and_then(|l| l.inner_format())
-            .or_else(|| physical.inner_format());
+        let inner = logical.and_then(|l| l.inner_format());
 
         let is_multi_volume = extensions.iter().any(|e| {
             matches!(e.as_str(), "001" | "002")
@@ -97,7 +89,13 @@ impl AutoFormat {
         }
 
         let validated = if let Some(registry) = &self.validators {
-            registry.validate(physical, path, &data).is_ok()
+            registry.validate(physical, path).map_err(|errors| {
+                DetectionError::ValidationFailed {
+                    format: physical,
+                    detail: errors.join("; "),
+                }
+            })?;
+            true
         } else {
             false
         };
@@ -123,63 +121,62 @@ impl Default for AutoFormat {
 fn file_format_to_archive_format(ff: FileFormat) -> Option<ArchiveFormat> {
     match ff {
         FileFormat::SevenZip => Some(ArchiveFormat::SevenZip),
-        FileFormat::Zip |
-        FileFormat::ThreeDimensionalManufacturingFormat |
-        FileFormat::AdobeIntegratedRuntime|
-        FileFormat::AndroidAppBundle|
-        FileFormat::AndroidPackage|
-        FileFormat::Autodesk123d|
-        FileFormat::CircuitDiagramDocument|
-        FileFormat::DesignWebFormatXps|
-        FileFormat::ElectronicPublication|
-        FileFormat::EnterpriseApplicationArchive|
-        FileFormat::FictionbookZip|
-        FileFormat::FigmaDesign|
-        FileFormat::FlashCs5Project |
-        FileFormat::Fusion360 |
-        FileFormat::IndesignMarkupLanguage|
-        FileFormat::JavaArchive |
-        FileFormat::KeyholeMarkupLanguageZip |
-        FileFormat::MicrosoftVisualStudioExtension |
-        FileFormat::MusicxmlZip|
-        FileFormat::OfficeOpenXmlDocument |
-        FileFormat::OfficeOpenXmlDrawing |
-        FileFormat::OfficeOpenXmlPresentation |
-        FileFormat::OfficeOpenXmlSpreadsheet |
-        FileFormat::OpendocumentDatabase |
-        FileFormat::OpendocumentFormula |
-        FileFormat::OpendocumentFormulaTemplate |
-        FileFormat::OpendocumentGraphics |
-        FileFormat::OpendocumentGraphicsTemplate |
-        FileFormat::OpendocumentPresentation|
-        FileFormat::OpendocumentPresentationTemplate |
-        FileFormat::OpendocumentSpreadsheet |
-        FileFormat::OpendocumentSpreadsheetTemplate |
-        FileFormat::OpendocumentText |
-        FileFormat::OpendocumentTextMaster |
-        FileFormat::OpendocumentTextMasterTemplate |
-        FileFormat::OpendocumentTextTemplate |
-        FileFormat::Openraster|
-        FileFormat::Openxps|
-        FileFormat::Sketch43|
-        FileFormat::SpaceclaimDocument|
-        FileFormat::SunXmlCalc|
-        FileFormat::SunXmlCalcTemplate |
-        FileFormat::SunXmlDraw |
-        FileFormat::SunXmlDrawTemplate |
-        FileFormat::SunXmlImpress |
-        FileFormat::SunXmlImpressTemplate|
-        FileFormat::SunXmlMath|
-        FileFormat::SunXmlWriter |
-        FileFormat::SunXmlWriterGlobal|
-        FileFormat::SunXmlWriterTemplate |
-        FileFormat::UniversalSceneDescriptionZip|
-        FileFormat::WebApplicationArchive|
-        FileFormat::WindowsAppBundle|
-        FileFormat::WindowsAppPackage|
-        FileFormat::Xpinstall|
-        FileFormat::IosAppStorePackage
-        => Some(ArchiveFormat::Zip),
+        FileFormat::Zip
+        | FileFormat::ThreeDimensionalManufacturingFormat
+        | FileFormat::AdobeIntegratedRuntime
+        | FileFormat::AndroidAppBundle
+        | FileFormat::AndroidPackage
+        | FileFormat::Autodesk123d
+        | FileFormat::CircuitDiagramDocument
+        | FileFormat::DesignWebFormatXps
+        | FileFormat::ElectronicPublication
+        | FileFormat::EnterpriseApplicationArchive
+        | FileFormat::FictionbookZip
+        | FileFormat::FigmaDesign
+        | FileFormat::FlashCs5Project
+        | FileFormat::Fusion360
+        | FileFormat::IndesignMarkupLanguage
+        | FileFormat::JavaArchive
+        | FileFormat::KeyholeMarkupLanguageZip
+        | FileFormat::MicrosoftVisualStudioExtension
+        | FileFormat::MusicxmlZip
+        | FileFormat::OfficeOpenXmlDocument
+        | FileFormat::OfficeOpenXmlDrawing
+        | FileFormat::OfficeOpenXmlPresentation
+        | FileFormat::OfficeOpenXmlSpreadsheet
+        | FileFormat::OpendocumentDatabase
+        | FileFormat::OpendocumentFormula
+        | FileFormat::OpendocumentFormulaTemplate
+        | FileFormat::OpendocumentGraphics
+        | FileFormat::OpendocumentGraphicsTemplate
+        | FileFormat::OpendocumentPresentation
+        | FileFormat::OpendocumentPresentationTemplate
+        | FileFormat::OpendocumentSpreadsheet
+        | FileFormat::OpendocumentSpreadsheetTemplate
+        | FileFormat::OpendocumentText
+        | FileFormat::OpendocumentTextMaster
+        | FileFormat::OpendocumentTextMasterTemplate
+        | FileFormat::OpendocumentTextTemplate
+        | FileFormat::Openraster
+        | FileFormat::Openxps
+        | FileFormat::Sketch43
+        | FileFormat::SpaceclaimDocument
+        | FileFormat::SunXmlCalc
+        | FileFormat::SunXmlCalcTemplate
+        | FileFormat::SunXmlDraw
+        | FileFormat::SunXmlDrawTemplate
+        | FileFormat::SunXmlImpress
+        | FileFormat::SunXmlImpressTemplate
+        | FileFormat::SunXmlMath
+        | FileFormat::SunXmlWriter
+        | FileFormat::SunXmlWriterGlobal
+        | FileFormat::SunXmlWriterTemplate
+        | FileFormat::UniversalSceneDescriptionZip
+        | FileFormat::WebApplicationArchive
+        | FileFormat::WindowsAppBundle
+        | FileFormat::WindowsAppPackage
+        | FileFormat::Xpinstall
+        | FileFormat::IosAppStorePackage => Some(ArchiveFormat::Zip),
         FileFormat::TapeArchive => Some(ArchiveFormat::Tar),
         FileFormat::Gzip => Some(ArchiveFormat::GZip),
         FileFormat::Bzip2 => Some(ArchiveFormat::BZip2),
@@ -204,7 +201,6 @@ fn file_format_to_archive_format(ff: FileFormat) -> Option<ArchiveFormat> {
         _ => None,
     }
 }
-
 
 fn parse_extensions(path: &str) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();

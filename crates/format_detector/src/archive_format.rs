@@ -231,13 +231,7 @@ impl ArchiveFormat {
     }
 
     pub fn supports_compression_level(&self) -> bool {
-        !matches!(
-            self,
-            ArchiveFormat::Tar
-                | ArchiveFormat::GZip
-                | ArchiveFormat::BZip2
-                | ArchiveFormat::Xz
-        )
+        self.is_writable() && !matches!(self, ArchiveFormat::Tar)
     }
 
     pub fn display_name(&self) -> &str {
