@@ -42,9 +42,9 @@ impl TreeBuilder {
 
     /// Add several archive entries to the tree.
     pub fn add_entries(mut self, entries: &[ArchiveEntry]) -> Self {
-        for entry in entries {
+        entries.iter().for_each( |entry|{
             self.insert_entry(entry);
-        }
+        });
         self
     }
 
@@ -56,13 +56,22 @@ impl TreeBuilder {
     fn insert_entry(&mut self, entry: &ArchiveEntry) {
         let normalized = entry.path.trim_end_matches('/').replace('\\', "/");
         let parent_path = parent_of(&normalized);
-        let parent_id = ensure_dir(&mut self.tree, &mut self.path_map, &parent_path, self.root_id);
+        let parent_id = ensure_dir(
+            &mut self.tree,
+            &mut self.path_map,
+            &parent_path,
+            self.root_id,
+        );
 
         let node_id = next_node_id();
-        let name = normalized.rsplit('/').next().unwrap_or(&normalized).to_string();
+        let name = normalized
+            .rsplit('/')
+            .next()
+            .unwrap_or(&normalized)
+            .to_string();
         let mut node = VfsNode::new(node_id, Some(parent_id), name, entry.is_directory);
         fill_attrs(&mut node, entry);
-        if self.tree.insert_node(node).is_ok() {
+        if self.tree.insert_node_allow_duplicate(node).is_ok() {
             self.path_map.insert(normalized, node_id);
         }
     }
@@ -139,8 +148,18 @@ fn ensure_dir(
     let name = path.rsplit('/').next().unwrap_or(path).to_string();
     let node_id = next_node_id();
     let node = VfsNode::new(node_id, Some(parent_id), name, true);
-    if tree.insert_node(node).is_ok() {
-        path_map.insert(path.to_string(), node_id);
+    match tree.insert_node_allow_duplicate(node) {
+        Ok(()) => {
+            path_map.insert(path.to_string(), node_id);
+        }
+        Err(_) => {
+            // A node for this path already exists (e.g. a file entry listed
+            // before a synthetic directory). Reuse it rather than returning
+            // an id that was never inserted.
+            if let Some(existing) = tree.resolve_path(path) {
+                return existing;
+            }
+        }
     }
     node_id
 }
@@ -185,6 +204,7 @@ mod tests {
             entry(2, "root.txt", 30),
         ];
         let tree = build_tree(&entries);
+        println!("{}", tree);
         assert!(tree.resolve_path("a/b/c.txt").is_some());
         assert!(tree.resolve_path("a/b/d.txt").is_some());
         assert!(tree.resolve_path("root.txt").is_some());
@@ -200,15 +220,43 @@ mod tests {
         let id = tree.resolve_path("f.bin").unwrap();
         let node = tree.node(id).unwrap();
         assert_eq!(node.attr(attr::SIZE).and_then(|v| v.as_u64()), Some(42));
-        assert_eq!(node.attr(attr::ARCHIVE_INDEX).and_then(|v| v.as_u64()), Some(7));
+        assert_eq!(
+            node.attr(attr::ARCHIVE_INDEX).and_then(|v| v.as_u64()),
+            Some(7)
+        );
         assert_eq!(node.attr(attr::CRC).and_then(|v| v.as_u64()), Some(0x1234));
-        assert_eq!(node.attr(attr::SOURCE).and_then(|v| v.as_str()), Some("archive"));
+        assert_eq!(
+            node.attr(attr::SOURCE).and_then(|v| v.as_str()),
+            Some("archive")
+        );
     }
 
     #[test]
     fn backslash_paths_are_normalized() {
         let entries = vec![entry(0, "dir\\file.txt", 1)];
         let tree = build_tree(&entries);
+        assert!(tree.resolve_path("dir/file.txt").is_some());
+    }
+
+    #[test]
+    fn duplicate_archive_paths_are_preserved() {
+        let entries = vec![
+            entry(0, "same.txt", 1),
+            entry(1, "same.txt", 2),
+            entry(2, "dir/file.txt", 3),
+        ];
+        let tree = build_tree(&entries);
+        let root = tree.root();
+        let mut names = Vec::new();
+        if let Some(children) = tree.children(root) {
+            for &id in children {
+                if let Some(node) = tree.node(id) {
+                    names.push(node.name.clone());
+                }
+            }
+        }
+        println!("{}", tree);
+        assert_eq!(names.iter().filter(|n| n.as_str() == "same.txt").count(), 2);
         assert!(tree.resolve_path("dir/file.txt").is_some());
     }
 }

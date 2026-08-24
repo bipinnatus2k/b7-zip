@@ -7,7 +7,7 @@
 //! machinery can merge them with trees from other sources (e.g. archives).
 
 use fs_watcher::{FsEvent, FsEventKind};
-use jiff::civil::DateTime;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use vfs::{AttrValue, Tree, VfsNode, attr, next_node_id};
 
@@ -55,14 +55,17 @@ impl FsTree {
             FsEventKind::Create => {
                 let metadata = std::fs::metadata(&event.path)?;
                 let parent_rel = parent_of(&rel_str);
-                let parent_id = self
-                    .tree
-                    .resolve_path(&parent_rel)
-                    .ok_or_else(|| FsError::ParentMissing(parent_rel.clone()))?;
+                let Some(parent_id) = self.tree.resolve_path(&parent_rel) else {
+                    // notify can deliver children before their parent
+                    // directory. Rebuilding from disk is idempotent and
+                    // guarantees no event is lost.
+                    self.rescan()?;
+                    return Ok(Vec::new());
+                };
                 let node_id = next_node_id();
                 let name = rel_str.rsplit('/').next().unwrap_or(&rel_str).to_string();
                 let mut node = VfsNode::new(node_id, Some(parent_id), name, metadata.is_dir());
-                fill_fs_attrs(&mut node, &event.path, &metadata);
+                fill_fs_attrs(&mut node, &event.path, &metadata, true);
                 if self.tree.insert_node(node).is_ok() {
                     return Ok(vec![FsChange::Added(node_id)]);
                 }
@@ -74,21 +77,21 @@ impl FsTree {
                 if event.path.is_dir() {
                     return Ok(Vec::new());
                 }
-                let id = self
-                    .tree
-                    .resolve_path(&rel_str)
-                    .ok_or_else(|| FsError::PathNotFound(rel_str.clone()))?;
+                let Some(id) = self.tree.resolve_path(&rel_str) else {
+                    self.rescan()?;
+                    return Ok(Vec::new());
+                };
                 let metadata = std::fs::metadata(&event.path)?;
                 if let Some(node) = self.tree.node_mut(id) {
-                    fill_fs_attrs(node, &event.path, &metadata);
+                    fill_fs_attrs(node, &event.path, &metadata, true);
                 }
                 Ok(vec![FsChange::Modified(id)])
             }
             FsEventKind::Remove => {
-                let id = self
-                    .tree
-                    .resolve_path(&rel_str)
-                    .ok_or_else(|| FsError::PathNotFound(rel_str.clone()))?;
+                let Some(id) = self.tree.resolve_path(&rel_str) else {
+                    self.rescan()?;
+                    return Ok(Vec::new());
+                };
                 self.tree.remove_node(id)?;
                 Ok(vec![FsChange::Removed(id)])
             }
@@ -97,12 +100,40 @@ impl FsTree {
                     .strip_prefix(&self.root)
                     .map_err(|_| FsError::OutsideRoot(from.clone()))?;
                 let from_str = to_forward_slashes(from_rel);
-                let id = self
-                    .tree
-                    .resolve_path(&from_str)
-                    .ok_or_else(|| FsError::PathNotFound(from_str.clone()))?;
+                let Some(id) = self.tree.resolve_path(&from_str) else {
+                    self.rescan()?;
+                    return Ok(Vec::new());
+                };
                 let name = rel_str.rsplit('/').next().unwrap_or(&rel_str).to_string();
-                self.tree.rename_node(id, &name)?;
+                let from_parent_path = parent_of(&from_str);
+                let from_parent = if from_parent_path.is_empty() {
+                    self.tree.root()
+                } else {
+                    match self.tree.resolve_path(&from_parent_path) {
+                        Some(id) => id,
+                        None => {
+                            self.rescan()?;
+                            return Ok(Vec::new());
+                        }
+                    }
+                };
+                let to_parent_path = parent_of(&rel_str);
+                let to_parent = if to_parent_path.is_empty() {
+                    self.tree.root()
+                } else {
+                    match self.tree.resolve_path(&to_parent_path) {
+                        Some(id) => id,
+                        None => {
+                            self.rescan()?;
+                            return Ok(Vec::new());
+                        }
+                    }
+                };
+                if from_parent != to_parent {
+                    self.tree.reparent_node(id, Some(to_parent), &name)?;
+                } else {
+                    self.tree.rename_node(id, &name)?;
+                }
                 Ok(vec![FsChange::Renamed(id)])
             }
         }
@@ -136,12 +167,18 @@ pub enum FsError {
 fn scan_dir(root: &Path, dir: &Path, dir_id: vfs::NodeId, tree: &mut Tree) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
+        let file_type = entry.file_type()?;
+        // Do not follow symlinks while scanning: they can point outside the
+        // root or create directory cycles.
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let metadata = entry.metadata()?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let node_id = next_node_id();
         let mut node = VfsNode::new(node_id, Some(dir_id), name.clone(), metadata.is_dir());
-        fill_fs_attrs(&mut node, &path, &metadata);
+        fill_fs_attrs(&mut node, &path, &metadata, false);
         let is_dir = metadata.is_dir();
         if tree.insert_node(node).is_ok() && is_dir {
             scan_dir(root, &path, node_id, tree)?;
@@ -150,11 +187,17 @@ fn scan_dir(root: &Path, dir: &Path, dir_id: vfs::NodeId, tree: &mut Tree) -> st
     Ok(())
 }
 
-fn fill_fs_attrs(node: &mut VfsNode, path: &Path, metadata: &std::fs::Metadata) {
+fn fill_fs_attrs(node: &mut VfsNode, path: &Path, metadata: &std::fs::Metadata, with_crc: bool) {
     node.set_attr(attr::SOURCE, AttrValue::String("fs".into()));
-    node.set_attr(attr::FS_PATH, AttrValue::String(path.to_string_lossy().into_owned()));
+    node.set_attr(
+        attr::FS_PATH,
+        AttrValue::String(path.to_string_lossy().into_owned()),
+    );
     if metadata.is_file() {
         node.set_attr(attr::SIZE, AttrValue::UInt(metadata.len()));
+        if with_crc && let Ok(crc) = crc32_file(path) {
+            node.set_attr(attr::CRC, AttrValue::UInt(crc as u64));
+        }
     }
     if let Ok(modified) = metadata.modified()
         && let Ok(system_time) = modified.duration_since(std::time::UNIX_EPOCH)
@@ -177,6 +220,27 @@ fn parent_of(path: &str) -> String {
         Some(idx) => path[..idx].to_string(),
         None => String::new(),
     }
+}
+
+impl FsTree {
+    fn rescan(&mut self) -> std::io::Result<()> {
+        *self = FsTree::scan(&self.root)?;
+        Ok(())
+    }
+}
+
+fn crc32_file(path: &Path) -> std::io::Result<u32> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = crc32fast::Hasher::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -202,8 +266,22 @@ mod tests {
         std::fs::write(dir.path().join("sub/b.txt"), b"world").unwrap();
         let tree = FsTree::scan(dir.path()).unwrap();
         let a = tree.tree().resolve_path("a.txt").unwrap();
-        assert_eq!(tree.tree().node(a).unwrap().attr(attr::SIZE).and_then(|v| v.as_u64()), Some(5));
-        assert_eq!(tree.tree().node(a).unwrap().attr(attr::SOURCE).and_then(|v| v.as_str()), Some("fs"));
+        assert_eq!(
+            tree.tree()
+                .node(a)
+                .unwrap()
+                .attr(attr::SIZE)
+                .and_then(|v| v.as_u64()),
+            Some(5)
+        );
+        assert_eq!(
+            tree.tree()
+                .node(a)
+                .unwrap()
+                .attr(attr::SOURCE)
+                .and_then(|v| v.as_str()),
+            Some("fs")
+        );
         assert!(tree.tree().resolve_path("sub/b.txt").is_some());
         let sub = tree.tree().resolve_path("sub").unwrap();
         assert!(tree.tree().node(sub).unwrap().is_directory);
@@ -214,11 +292,20 @@ mod tests {
         let (dir, mut tree) = scan_temp();
         let file = dir.path().join("new.txt");
         std::fs::write(&file, b"x").unwrap();
-        let changes = tree.apply_event(&event(FsEventKind::Create, file.clone())).unwrap();
+        let changes = tree
+            .apply_event(&event(FsEventKind::Create, file.clone()))
+            .unwrap();
         assert_eq!(changes.len(), 1);
         assert!(matches!(changes[0], FsChange::Added(_)));
         let id = tree.tree().resolve_path("new.txt").unwrap();
-        assert_eq!(tree.tree().node(id).unwrap().attr(attr::FS_PATH).and_then(|v| v.as_str()), Some(file.to_str().unwrap()));
+        assert_eq!(
+            tree.tree()
+                .node(id)
+                .unwrap()
+                .attr(attr::FS_PATH)
+                .and_then(|v| v.as_str()),
+            Some(file.to_str().unwrap())
+        );
     }
 
     #[test]
@@ -226,12 +313,22 @@ mod tests {
         let (dir, mut tree) = scan_temp();
         let file = dir.path().join("m.txt");
         std::fs::write(&file, b"12345").unwrap();
-        tree.apply_event(&event(FsEventKind::Create, file.clone())).unwrap();
+        tree.apply_event(&event(FsEventKind::Create, file.clone()))
+            .unwrap();
         std::fs::write(&file, b"1234567890").unwrap();
-        let changes = tree.apply_event(&event(FsEventKind::Modify, file.clone())).unwrap();
+        let changes = tree
+            .apply_event(&event(FsEventKind::Modify, file.clone()))
+            .unwrap();
         assert!(matches!(changes[0], FsChange::Modified(_)));
         let id = tree.tree().resolve_path("m.txt").unwrap();
-        assert_eq!(tree.tree().node(id).unwrap().attr(attr::SIZE).and_then(|v| v.as_u64()), Some(10));
+        assert_eq!(
+            tree.tree()
+                .node(id)
+                .unwrap()
+                .attr(attr::SIZE)
+                .and_then(|v| v.as_u64()),
+            Some(10)
+        );
     }
 
     #[test]
@@ -239,7 +336,8 @@ mod tests {
         let (dir, mut tree) = scan_temp();
         let file = dir.path().join("r.txt");
         std::fs::write(&file, b"x").unwrap();
-        tree.apply_event(&event(FsEventKind::Create, file.clone())).unwrap();
+        tree.apply_event(&event(FsEventKind::Create, file.clone()))
+            .unwrap();
         std::fs::remove_file(&file).unwrap();
         let changes = tree.apply_event(&event(FsEventKind::Remove, file)).unwrap();
         assert!(matches!(changes[0], FsChange::Removed(_)));
@@ -252,9 +350,13 @@ mod tests {
         let from = dir.path().join("old.txt");
         let to = dir.path().join("new.txt");
         std::fs::write(&from, b"x").unwrap();
-        tree.apply_event(&event(FsEventKind::Create, from.clone())).unwrap();
+        tree.apply_event(&event(FsEventKind::Create, from.clone()))
+            .unwrap();
         let changes = tree
-            .apply_event(&event(FsEventKind::Rename { from: from.clone() }, to.clone()))
+            .apply_event(&event(
+                FsEventKind::Rename { from: from.clone() },
+                to.clone(),
+            ))
             .unwrap();
         assert!(matches!(changes[0], FsChange::Renamed(_)));
         assert!(tree.tree().resolve_path("new.txt").is_some());
@@ -265,7 +367,9 @@ mod tests {
     fn directory_modify_is_ignored() {
         let (dir, mut tree) = scan_temp();
         std::fs::create_dir_all(dir.path().join("d")).unwrap();
-        let changes = tree.apply_event(&event(FsEventKind::Modify, dir.path().join("d"))).unwrap();
+        let changes = tree
+            .apply_event(&event(FsEventKind::Modify, dir.path().join("d")))
+            .unwrap();
         assert!(changes.is_empty());
     }
 }

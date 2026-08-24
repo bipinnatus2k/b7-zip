@@ -7,7 +7,7 @@
 //! can consume it.
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
@@ -19,7 +19,9 @@ pub enum FsEventKind {
     Modify,
     Remove,
     /// A rename from `from` to the event's `path`.
-    Rename { from: PathBuf },
+    Rename {
+        from: PathBuf,
+    },
 }
 
 /// A normalized file system event. `path` is absolute.
@@ -102,7 +104,10 @@ impl FsWatcher {
     }
 
     /// Receive the next event, waiting at most `timeout`.
-    pub fn recv_timeout(&self, timeout: Duration) -> std::result::Result<FsEvent, RecvTimeoutError> {
+    pub fn recv_timeout(
+        &self,
+        timeout: Duration,
+    ) -> std::result::Result<FsEvent, RecvTimeoutError> {
         self.rx.recv_timeout(timeout).map_err(|e| match e {
             std::sync::mpsc::RecvTimeoutError::Timeout => RecvTimeoutError::Timeout,
             std::sync::mpsc::RecvTimeoutError::Disconnected => RecvTimeoutError::Disconnected,
@@ -134,47 +139,102 @@ fn pump_events(
     _root: &Path,
     config: &WatchConfig,
 ) {
-    let mut pending_rename_from: HashMap<PathBuf, (FsEvent, Instant)> = HashMap::new();
+    let mut pending_rename_from: VecDeque<FsEvent> = VecDeque::new();
     let mut last_modify: HashMap<PathBuf, Instant> = HashMap::new();
 
     while let Ok(result) = notify_rx.recv() {
         let Ok(event) = result else {
             continue;
         };
+        if matches!(
+            &event.kind,
+            EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Both
+            ))
+        ) {
+            let paths: Vec<&std::path::Path> = event
+                .paths
+                .iter()
+                .filter(|p| !ignored(p, config))
+                .map(|p| p.as_path())
+                .collect();
+            if paths.len() >= 2 {
+                let _ = tx.send(FsEvent {
+                    kind: FsEventKind::Rename {
+                        from: paths[0].to_path_buf(),
+                    },
+                    path: paths[1].to_path_buf(),
+                });
+            } else if let Some(path) = paths.first() {
+                let _ = tx.send(FsEvent {
+                    kind: FsEventKind::Create,
+                    path: (*path).to_path_buf(),
+                });
+            }
+            continue;
+        }
         for path in &event.paths {
             if ignored(path, config) {
                 continue;
             }
             match &event.kind {
                 EventKind::Create(_) => {
-                    let _ = tx.send(FsEvent { kind: FsEventKind::Create, path: path.clone() });
+                    let _ = tx.send(FsEvent {
+                        kind: FsEventKind::Create,
+                        path: path.clone(),
+                    });
                 }
                 EventKind::Remove(_) => {
-                    let _ = tx.send(FsEvent { kind: FsEventKind::Remove, path: path.clone() });
+                    let _ = tx.send(FsEvent {
+                        kind: FsEventKind::Remove,
+                        path: path.clone(),
+                    });
                 }
-                EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)) => {
+                EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::From,
+                )) => {
                     // Remember the source; the matching To event follows.
-                    pending_rename_from.insert(
-                        path.clone(),
-                        (FsEvent { kind: FsEventKind::Rename { from: path.clone() }, path: path.clone() }, Instant::now()),
-                    );
+                    pending_rename_from.push_back(FsEvent {
+                        kind: FsEventKind::Rename { from: path.clone() },
+                        path: path.clone(),
+                    });
                 }
-                EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::To)) => {
-                    // Pair with the pending From event if present.
-                    if let Some((from_event, _)) = pending_rename_from.remove(path) {
-                        let _ = tx.send(FsEvent { kind: FsEventKind::Rename { from: from_event.path }, path: path.clone() });
+                EventKind::Modify(notify::event::ModifyKind::Name(
+                    notify::event::RenameMode::To,
+                )) => {
+                    // Pair with the oldest pending From event. The To path is
+                    // necessarily different from the From path, which is why
+                    // this used to fail to match a keyed map lookup.
+                    if let Some(FsEvent {
+                        kind: FsEventKind::Rename { from },
+                        ..
+                    }) = pending_rename_from.pop_front()
+                    {
+                        let _ = tx.send(FsEvent {
+                            kind: FsEventKind::Rename { from },
+                            path: path.clone(),
+                        });
                     } else {
-                        let _ = tx.send(FsEvent { kind: FsEventKind::Create, path: path.clone() });
+                        let _ = tx.send(FsEvent {
+                            kind: FsEventKind::Create,
+                            path: path.clone(),
+                        });
                     }
                 }
                 EventKind::Modify(_) => {
                     // Debounce: drop repeated Modify events within the window.
                     let now = Instant::now();
-                    if last_modify.get(path).is_some_and(|t| now.duration_since(*t) < config.debounce) {
+                    if last_modify
+                        .get(path)
+                        .is_some_and(|t| now.duration_since(*t) < config.debounce)
+                    {
                         continue;
                     }
                     last_modify.insert(path.clone(), now);
-                    let _ = tx.send(FsEvent { kind: FsEventKind::Modify, path: path.clone() });
+                    let _ = tx.send(FsEvent {
+                        kind: FsEventKind::Modify,
+                        path: path.clone(),
+                    });
                 }
                 _ => {}
             }
@@ -189,7 +249,10 @@ fn ignored(path: &Path, config: &WatchConfig) -> bool {
     if config.ignore_hidden && name.starts_with('.') {
         return true;
     }
-    config.ignore_suffixes.iter().any(|suffix| name.ends_with(suffix))
+    config
+        .ignore_suffixes
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
 }
 
 use notify::Event;
@@ -208,7 +271,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let watcher = watch_dir(dir.path());
         fs::write(dir.path().join("new.txt"), b"hi").unwrap();
-        let event = watcher.recv_timeout(Duration::from_secs(5)).expect("create event");
+        let event = watcher
+            .recv_timeout(Duration::from_secs(5))
+            .expect("create event");
         assert_eq!(event.kind, FsEventKind::Create);
         assert!(event.path.ends_with("new.txt"));
     }
@@ -222,7 +287,9 @@ mod tests {
         // Consume the create event first.
         let _ = watcher.recv_timeout(Duration::from_secs(5));
         fs::remove_file(&file).unwrap();
-        let event = watcher.recv_timeout(Duration::from_secs(5)).expect("remove event");
+        let event = watcher
+            .recv_timeout(Duration::from_secs(5))
+            .expect("remove event");
         assert_eq!(event.kind, FsEventKind::Remove);
         assert!(event.path.ends_with("gone.txt"));
     }
@@ -237,7 +304,9 @@ mod tests {
         let _ = watcher.recv_timeout(Duration::from_secs(5)); // create
         fs::rename(&from, &to).unwrap();
         // On some platforms a rename arrives as Remove+Create; accept either.
-        let event = watcher.recv_timeout(Duration::from_secs(5)).expect("rename event");
+        let event = watcher
+            .recv_timeout(Duration::from_secs(5))
+            .expect("rename event");
         match event.kind {
             FsEventKind::Rename { from: f } => {
                 assert!(f.ends_with("a.txt"));
@@ -254,7 +323,9 @@ mod tests {
         let watcher = watch_dir(dir.path());
         fs::write(dir.path().join("editor.tmp"), b"x").unwrap();
         fs::write(dir.path().join("normal.txt"), b"x").unwrap();
-        let event = watcher.recv_timeout(Duration::from_secs(5)).expect("normal create");
+        let event = watcher
+            .recv_timeout(Duration::from_secs(5))
+            .expect("normal create");
         assert!(event.path.ends_with("normal.txt"), "got {:?}", event);
     }
 }

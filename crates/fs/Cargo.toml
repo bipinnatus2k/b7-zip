@@ -9,6 +9,7 @@ publish.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+crc32fast = "1"
 fs_watcher.workspace = true
 thiserror.workspace = true
 jiff.workspace = true
