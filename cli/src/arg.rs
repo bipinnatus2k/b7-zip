@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
@@ -8,12 +8,21 @@ use clap::{Parser, Subcommand};
     about = "Cross-platform compressed file viewer and editor"
 )]
 pub struct Cli {
+    /// Enable debug output in processes launched by this CLI.
+    #[arg(long, global = true)]
+    pub debug: bool,
+
+    /// Optional config file handed to launched GUI processes.
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+
+    /// Run long tasks in a detached bit7z-executor window instead of the
+    /// current process.
+    #[arg(long, global = true)]
+    pub gui: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
-
-    // /// Run as a background worker process (spawned by parent for IPC operations)
-    // #[arg(long, global = true, hide = true)]
-    // pub worker: bool,
 }
 
 #[derive(Subcommand)]

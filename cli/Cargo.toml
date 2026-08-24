@@ -15,6 +15,7 @@ checksum.workspace = true
 clap.workspace = true
 password.workspace = true
 task.workspace = true
+temp.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
