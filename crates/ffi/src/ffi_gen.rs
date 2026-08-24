@@ -18,6 +18,7 @@ unsafe extern "C" {
     pub fn bit7z_item_is_dir(reader_ptr: *mut std::ffi::c_void, index: u32) -> i32;
     pub fn bit7z_item_is_encrypted(reader_ptr: *mut std::ffi::c_void, index: u32) -> i32;
     pub fn bit7z_item_crc(reader_ptr: *mut std::ffi::c_void, index: u32) -> u32;
+    pub fn bit7z_item_crc_defined(ptr: *mut std::ffi::c_void) -> i32;
     pub fn bit7z_item_mtime(ptr: *mut std::ffi::c_void) -> u64;
     pub fn bit7z_item_ctime(ptr: *mut std::ffi::c_void) -> u64;
     pub fn bit7z_item_atime(ptr: *mut std::ffi::c_void) -> u64;

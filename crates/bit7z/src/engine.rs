@@ -250,14 +250,24 @@ impl From<String> for ArchiveError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineOp {
     /// Add a file from disk at `fs_path` into the archive at `archive_path`.
-    Add { fs_path: PathBuf, archive_path: String },
+    Add {
+        fs_path: PathBuf,
+        archive_path: String,
+    },
     /// Replace the content of the entry `archive_index` (previously at
     /// `archive_path`) with `fs_path`.
-    Modify { archive_index: u32, archive_path: String, fs_path: PathBuf },
+    Modify {
+        archive_index: u32,
+        archive_path: String,
+        fs_path: PathBuf,
+    },
     /// Remove the entry `archive_index`.
     Delete { archive_index: u32 },
     /// Rename the entry `archive_index` to `new_path`.
-    Rename { archive_index: u32, new_path: String },
+    Rename {
+        archive_index: u32,
+        new_path: String,
+    },
 }
 
 /// How to behave when the target already exists during extraction.
@@ -277,6 +287,12 @@ pub type ProgressFn = dyn Fn(u64, u64) + Send + Sync;
 /// A per-file callback: the archive path of the file being processed.
 pub type FileFn = dyn Fn(&str) + Send + Sync;
 
+/// An overwrite conflict callback used by [`OverwriteMode::Ask`].
+///
+/// Receives the destination path of an existing file and returns `true` to
+/// overwrite it or `false` to skip it.
+pub type ConflictFn = dyn Fn(&str) -> bool + Send + Sync;
+
 /// Options for an extraction operation.
 #[derive(Clone, Default)]
 pub struct ExtractOptions {
@@ -286,6 +302,9 @@ pub struct ExtractOptions {
     pub progress: Option<std::sync::Arc<ProgressFn>>,
     /// Optional per-file callback (invoked from the worker thread).
     pub file: Option<std::sync::Arc<FileFn>>,
+    /// Conflict resolver for [`OverwriteMode::Ask`]. `true` overwrites,
+    /// `false` skips. Required when `overwrite` is `Ask`.
+    pub on_conflict: Option<std::sync::Arc<ConflictFn>>,
 }
 
 /// Options for a compression operation.
@@ -350,22 +369,52 @@ pub struct ProgressInfo {
 /// thread-safe; individual handles are serialized internally).
 pub trait ArchiveEngine: Send + Sync {
     /// List all entries of the archive at `path`.
-    fn list(&self, path: &std::path::Path, password: Option<&password::Password>) -> Result<Vec<ArchiveEntry>, ArchiveError>;
+    fn list(
+        &self,
+        path: &std::path::Path,
+        password: Option<&password::Password>,
+    ) -> Result<Vec<ArchiveEntry>, ArchiveError>;
 
     /// Extract the given entries (by index) to `dest`.
-    fn extract(&self, path: &std::path::Path, indices: &[u32], dest: &std::path::Path, password: Option<&password::Password>, options: &ExtractOptions) -> Result<(), ArchiveError>;
+    fn extract(
+        &self,
+        path: &std::path::Path,
+        indices: &[u32],
+        dest: &std::path::Path,
+        password: Option<&password::Password>,
+        options: &ExtractOptions,
+    ) -> Result<(), ArchiveError>;
 
     /// Extract a single entry to an in-memory buffer.
-    fn extract_to_buffer(&self, path: &std::path::Path, index: u32, password: Option<&password::Password>) -> Result<Vec<u8>, ArchiveError>;
+    fn extract_to_buffer(
+        &self,
+        path: &std::path::Path,
+        index: u32,
+        password: Option<&password::Password>,
+    ) -> Result<Vec<u8>, ArchiveError>;
 
     /// Test the integrity of the archive.
-    fn test(&self, path: &std::path::Path, password: Option<&password::Password>) -> Result<TestResult, ArchiveError>;
+    fn test(
+        &self,
+        path: &std::path::Path,
+        password: Option<&password::Password>,
+    ) -> Result<TestResult, ArchiveError>;
 
     /// Create a new archive at `target` from `inputs` (fs paths).
-    fn compress(&self, inputs: &[PathBuf], target: &std::path::Path, options: &CompressOptions) -> Result<(), ArchiveError>;
+    fn compress(
+        &self,
+        inputs: &[PathBuf],
+        target: &std::path::Path,
+        options: &CompressOptions,
+    ) -> Result<(), ArchiveError>;
 
     /// Apply edit operations to an existing archive at `path`.
-    fn update(&self, path: &std::path::Path, ops: &[EngineOp], password: Option<&password::Password>) -> Result<(), ArchiveError>;
+    fn update(
+        &self,
+        path: &std::path::Path,
+        ops: &[EngineOp],
+        password: Option<&password::Password>,
+    ) -> Result<(), ArchiveError>;
 
     /// Whether the archive at `path` has any encrypted content (static check).
     fn is_encrypted(&self, path: &std::path::Path) -> Result<bool, ArchiveError>;

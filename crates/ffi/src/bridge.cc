@@ -20,6 +20,7 @@ void* (*force_bit7z_item_packed_size)(void) = (void* (*)(void)) &bit7z_item_pack
 void* (*force_bit7z_item_is_dir)(void) = (void* (*)(void)) &bit7z_item_is_dir;
 void* (*force_bit7z_item_is_encrypted)(void) = (void* (*)(void)) &bit7z_item_is_encrypted;
 void* (*force_bit7z_item_crc)(void) = (void* (*)(void)) &bit7z_item_crc;
+void* (*force_bit7z_item_crc_defined)(void) = (void* (*)(void)) &bit7z_item_crc_defined;
 void* (*force_bit7z_item_mtime)(void) = (void* (*)(void)) &bit7z_item_mtime;
 void* (*force_bit7z_item_ctime)(void) = (void* (*)(void)) &bit7z_item_ctime;
 void* (*force_bit7z_item_atime)(void) = (void* (*)(void)) &bit7z_item_atime;

@@ -28,7 +28,11 @@ fn roundtrip_7z_with_chinese_names() {
 
     let archive = dir.path().join("test.7z");
     engine
-        .compress(&[chinese.clone(), plain.clone()], &archive, &CompressOptions::default())
+        .compress(
+            &[chinese.clone(), plain.clone()],
+            &archive,
+            &CompressOptions::default(),
+        )
         .expect("compress");
 
     // List and verify entries.
@@ -46,7 +50,16 @@ fn roundtrip_7z_with_chinese_names() {
     std::fs::create_dir_all(&dest).unwrap();
     let indices: Vec<u32> = entries.iter().map(|e| e.index).collect();
     engine
-        .extract(&archive, &indices, &dest, None, &Default::default())
+        .extract(
+            &archive,
+            &indices,
+            &dest,
+            None,
+            &bit7z_rs::ExtractOptions {
+                overwrite: bit7z_rs::OverwriteMode::Overwrite,
+                ..Default::default()
+            },
+        )
         .expect("extract");
     let extracted = dest.join("中文 文件.txt");
     assert_eq!(
@@ -72,7 +85,9 @@ fn roundtrip_zip() {
     let archive = dir.path().join("test.zip");
     let mut options = CompressOptions::default();
     options.format = WriterFormat::Zip;
-    engine.compress(&[src.clone()], &archive, &options).expect("compress zip");
+    engine
+        .compress(&[src.clone()], &archive, &options)
+        .expect("compress zip");
 
     let entries = engine.list(&archive, None).expect("list zip");
     assert_eq!(entries.len(), 1);
@@ -81,9 +96,21 @@ fn roundtrip_zip() {
     let dest = dir.path().join("out");
     std::fs::create_dir_all(&dest).unwrap();
     engine
-        .extract(&archive, &[entries[0].index], &dest, None, &Default::default())
+        .extract(
+            &archive,
+            &[entries[0].index],
+            &dest,
+            None,
+            &bit7z_rs::ExtractOptions {
+                overwrite: bit7z_rs::OverwriteMode::Overwrite,
+                ..Default::default()
+            },
+        )
         .expect("extract zip");
-    assert_eq!(std::fs::read(dest.join("data.bin")).unwrap(), vec![0u8; 4096]);
+    assert_eq!(
+        std::fs::read(dest.join("data.bin")).unwrap(),
+        vec![0u8; 4096]
+    );
 }
 
 #[test]
@@ -96,9 +123,13 @@ fn extract_to_buffer() {
     let src = dir.path().join("mem.txt");
     std::fs::write(&src, b"buffer content").unwrap();
     let archive = dir.path().join("mem.7z");
-    engine.compress(&[src], &archive, &CompressOptions::default()).expect("compress");
+    engine
+        .compress(&[src], &archive, &CompressOptions::default())
+        .expect("compress");
     let entries = engine.list(&archive, None).unwrap();
-    let bytes = engine.extract_to_buffer(&archive, entries[0].index, None).expect("buffer");
+    let bytes = engine
+        .extract_to_buffer(&archive, entries[0].index, None)
+        .expect("buffer");
     assert_eq!(bytes, b"buffer content");
 }
 
@@ -114,7 +145,13 @@ fn update_add_delete_rename() {
     let b = dir.path().join("b.txt");
     std::fs::write(&b, "bbb").unwrap();
     let archive = dir.path().join("edit.7z");
-    engine.compress(&[a.clone(), b.clone()], &archive, &CompressOptions::default()).expect("compress");
+    engine
+        .compress(
+            &[a.clone(), b.clone()],
+            &archive,
+            &CompressOptions::default(),
+        )
+        .expect("compress");
 
     let entries = engine.list(&archive, None).unwrap();
     assert_eq!(entries.len(), 2);
@@ -125,9 +162,17 @@ fn update_add_delete_rename() {
     let new = dir.path().join("new.txt");
     std::fs::write(&new, "new content").unwrap();
     let ops = vec![
-        bit7z_rs::EngineOp::Delete { archive_index: a_entry.index },
-        bit7z_rs::EngineOp::Rename { archive_index: b_entry.index, new_path: "c.txt".into() },
-        bit7z_rs::EngineOp::Add { fs_path: new.clone(), archive_path: "new.txt".into() },
+        bit7z_rs::EngineOp::Delete {
+            archive_index: a_entry.index,
+        },
+        bit7z_rs::EngineOp::Rename {
+            archive_index: b_entry.index,
+            new_path: "c.txt".into(),
+        },
+        bit7z_rs::EngineOp::Add {
+            fs_path: new.clone(),
+            archive_path: "new.txt".into(),
+        },
     ];
     engine.update(&archive, &ops, None).expect("update");
 
@@ -151,7 +196,9 @@ fn password_protected_roundtrip() {
     let mut options = CompressOptions::default();
     options.password = Some("hunter2".into());
     options.encrypt_headers = true;
-    engine.compress(&[src], &archive, &options).expect("compress");
+    engine
+        .compress(&[src], &archive, &options)
+        .expect("compress");
 
     // Header encryption should be detectable without a password.
     assert!(engine.is_header_encrypted(&archive).unwrap());
@@ -159,7 +206,73 @@ fn password_protected_roundtrip() {
 
     // Listing requires the password.
     let pw = bit7z_rs::password::Password::new("hunter2");
-    let entries = engine.list(&archive, Some(&pw)).expect("list with password");
+    let entries = engine
+        .list(&archive, Some(&pw))
+        .expect("list with password");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].name, "secret.txt");
+}
+
+#[test]
+fn extract_empty_file_to_buffer() {
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("empty.bin");
+    std::fs::write(&src, b"").unwrap();
+    let archive = dir.path().join("empty.7z");
+    engine
+        .compress(&[src], &archive, &CompressOptions::default())
+        .expect("compress");
+    let entries = engine.list(&archive, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].size, 0);
+    let bytes = engine
+        .extract_to_buffer(&archive, entries[0].index, None)
+        .expect("buffer");
+    assert!(bytes.is_empty());
+}
+
+#[test]
+fn auto_rename_keeps_existing_file() {
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("a.txt");
+    std::fs::write(&src, "NEW").unwrap();
+    let archive = dir.path().join("rename.7z");
+    engine
+        .compress(&[src], &archive, &CompressOptions::default())
+        .expect("compress");
+    let index = engine.list(&archive, None).unwrap()[0].index;
+    let dest = dir.path().join("out");
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(dest.join("a.txt"), "OLD").unwrap();
+
+    let progress =
+        std::sync::Arc::new(|_: u64, _: u64| {}) as std::sync::Arc<dyn Fn(u64, u64) + Send + Sync>;
+    let file = std::sync::Arc::new(|_: &str| {}) as std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+    engine
+        .extract(
+            &archive,
+            &[index],
+            &dest,
+            None,
+            &bit7z_rs::ExtractOptions {
+                overwrite: bit7z_rs::OverwriteMode::AutoRename,
+                progress: Some(progress),
+                file: Some(file),
+                ..Default::default()
+            },
+        )
+        .expect("auto rename extract");
+    assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "OLD");
+    assert_eq!(
+        std::fs::read_to_string(dest.join("a (1).txt")).unwrap(),
+        "NEW"
+    );
 }

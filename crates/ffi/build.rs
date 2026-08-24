@@ -31,6 +31,14 @@ fn main() {
     let mut build = cc::Build::new();
     build.cpp(true).file(manifest_dir.join("src/bridge.cc"));
     build.include(manifest_dir.join("src"));
+    // Match the interface compile definitions exported by vcpkg's
+    // bit7zConfig.cmake. Without these, header-only inline functions in
+    // bridge.cc and the precompiled bit7z library disagree on long-path and
+    // path-sanitization behavior.
+    build.define("BIT7Z_AUTO_FORMAT", None);
+    build.define("BIT7Z_DETECT_FROM_EXTENSION", None);
+    build.define("BIT7Z_AUTO_PREFIX_LONG_PATHS", None);
+    build.define("BIT7Z_PATH_SANITIZATION", None);
     if let Some(ref dir) = installed {
         build.include(dir.join("include"));
     }

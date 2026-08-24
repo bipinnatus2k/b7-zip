@@ -110,6 +110,12 @@ extern "C" inline uint32_t bit7z_item_crc(void* reader_ptr, uint32_t index) {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].crc();
     } catch (...) { return 0; }
 }
+extern "C" inline int32_t bit7z_item_crc_defined(void* ptr) {
+    try {
+        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
+        return item->itemProperty(ArchiveProperties::CRC).isEmpty() ? 0 : 1;
+    } catch (...) { return 0; }
+}
 
 // Helper: copy bit7z::tstring to a UTF-8 char buffer (caller-owned).
 // Returns byte count written (excluding null terminator), or -1 on error.
@@ -249,7 +255,7 @@ extern "C" inline int32_t bit7z_reader_extract_item_to_buffer(void* reader_ptr, 
         bit7z::buffer_t buf;
         reader.extractTo(buf, index);
         *out_size = static_cast<int64_t>(buf.size());
-        if (buf.empty()) { *out_data = nullptr; return -1; }
+        if (buf.empty()) { *out_data = nullptr; return 0; }
         auto* data = new unsigned char[buf.size()];
         std::copy(buf.begin(), buf.end(), data);
         *out_data = data;
@@ -942,7 +948,7 @@ inline int32_t bit7z_reader_extract_with_rename(
     void* reader_ptr,
     const char* dest_path,
     void* ctx,
-    int32_t (*on_rename)(const char* src, uint64_t size, int32_t is_dir, char* out, uint32_t out_size, void* ctx),
+    int32_t (*on_rename)(const char* src, uint32_t index, uint64_t size, int32_t is_dir, char* out, uint32_t out_size, void* ctx),
     int32_t (*on_progress)(uint64_t processed, uint64_t total, void* ctx),
     void   (*on_file)(const char* path, void* ctx)
 ) {
@@ -969,7 +975,7 @@ inline int32_t bit7z_reader_extract_with_rename(
                 char buf[4096];
                 buf[0] = '\0';
                 auto p = item.path();
-                if (on_rename(p.c_str(), item.size(), item.isDir() ? 1 : 0, buf, (uint32_t)sizeof(buf), ctx) != 0) {
+                if (on_rename(p.c_str(), item.index(), item.size(), item.isDir() ? 1 : 0, buf, (uint32_t)sizeof(buf), ctx) != 0) {
                     return {};   // abort operation
                 }
                 if (buf[0] == '\0') return {};  // skip this item
@@ -1014,7 +1020,7 @@ extern "C" int32_t bit7z_reader_extract_with_rename_c(
     void* reader_ptr,
     const char* dest_path,
     void* ctx,
-    int32_t (*on_rename)(const char* src, uint64_t size, int32_t is_dir, char* out, uint32_t out_size, void* ctx),
+    int32_t (*on_rename)(const char* src, uint32_t index, uint64_t size, int32_t is_dir, char* out, uint32_t out_size, void* ctx),
     int32_t (*on_progress)(uint64_t processed, uint64_t total, void* ctx),
     void   (*on_file)(const char* path, void* ctx)
 ) {

@@ -5,9 +5,14 @@ use std::path::{Path, PathBuf};
 /// Locate the 7-Zip DLL by searching the exe dir, then `VCPKG_ROOT`.
 pub fn locate_dll() -> Option<PathBuf> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let vcpkg_bin = std::env::var("VCPKG_ROOT")
-        .ok()
-        .map(|root| PathBuf::from(root).join("installed/x64-windows/bin"));
+    let vcpkg_bin = std::env::var("VCPKG_ROOT").ok().map(|root| {
+        let triple =
+            std::env::var("VCPKG_DEFAULT_TRIPLET").unwrap_or_else(|_| "x64-windows".into());
+        PathBuf::from(root)
+            .join("installed")
+            .join(triple)
+            .join("bin")
+    });
     locate_dll_in(&exe_dir, vcpkg_bin.as_deref())
 }
 
@@ -41,14 +46,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         touch(&dir.path().join("7z.dll"));
         touch(&dir.path().join("7zip.dll"));
-        assert_eq!(locate_dll_in(dir.path(), None), Some(dir.path().join("7z.dll")));
+        assert_eq!(
+            locate_dll_in(dir.path(), None),
+            Some(dir.path().join("7z.dll"))
+        );
     }
 
     #[test]
     fn exe_dir_falls_back_to_7zip_dll() {
         let dir = tempfile::tempdir().unwrap();
         touch(&dir.path().join("7zip.dll"));
-        assert_eq!(locate_dll_in(dir.path(), None), Some(dir.path().join("7zip.dll")));
+        assert_eq!(
+            locate_dll_in(dir.path(), None),
+            Some(dir.path().join("7zip.dll"))
+        );
     }
 
     #[test]

@@ -1,9 +1,12 @@
-use std::ffi::{CStr};
-use std::ptr;
-use bit7z_ffi::{bit7z_reader_extract_to_buffer_c, bit7z_reader_extract_to_cb_c, bit7z_reader_extract_with_rename_c, bit7z_reader_has_encrypted_items, c_void};
-use password::Password;
 use crate::handle::BitArchiveHandle;
 use crate::library::Bit7zLibrary;
+use bit7z_ffi::{
+    bit7z_reader_extract_to_buffer_c, bit7z_reader_extract_to_cb_c,
+    bit7z_reader_extract_with_rename_c, bit7z_reader_has_encrypted_items, c_void,
+};
+use password::Password;
+use std::ffi::CStr;
+use std::ptr;
 
 // ============================================================================
 // ArchiveReader
@@ -21,7 +24,11 @@ unsafe impl Send for ArchiveReader {}
 unsafe impl Sync for ArchiveReader {}
 
 impl ArchiveReader {
-    pub fn open(lib: &Bit7zLibrary, path: &str, password: Option<&Password>) -> Result<Self, String> {
+    pub fn open(
+        lib: &Bit7zLibrary,
+        path: &str,
+        password: Option<&Password>,
+    ) -> Result<Self, String> {
         let c_path = std::ffi::CString::new(path).map_err(|e| format!("Invalid path: {}", e))?;
         let c_pw = password
             .map(|p| std::ffi::CString::new(p.as_str()))
@@ -74,8 +81,11 @@ impl ArchiveReader {
         let ret = unsafe {
             bit7z_reader_extract_to_buffer_c(self.raw.as_ptr(), index, &mut out_data, &mut out_size)
         };
-        if ret != 0 || out_data.is_null() || out_size <= 0 {
+        if ret != 0 || out_size < 0 || (out_size > 0 && out_data.is_null()) {
             return Err("Extraction to buffer failed".into());
+        }
+        if out_size == 0 {
+            return Ok(Vec::new());
         }
         let slice = unsafe { std::slice::from_raw_parts(out_data as *const u8, out_size as usize) };
         let result = slice.to_vec();
@@ -190,6 +200,7 @@ impl ArchiveReader {
         on_rename: Option<
             unsafe extern "C" fn(
                 *const std::ffi::c_char,
+                u32,
                 u64,
                 i32,
                 *mut std::ffi::c_char,
@@ -226,9 +237,6 @@ impl Drop for ArchiveReader {
         }
     }
 }
-
-
-
 
 // ============================================================================
 // Item

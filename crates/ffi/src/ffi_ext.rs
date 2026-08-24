@@ -31,6 +31,7 @@ unsafe extern "C" {
         on_rename: Option<
             unsafe extern "C" fn(
                 *const std::ffi::c_char,
+                u32,
                 u64,
                 i32,
                 *mut std::ffi::c_char,
