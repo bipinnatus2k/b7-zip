@@ -1,0 +1,20 @@
+[package]
+name = "multi-workspace-demo"
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+
+[dependencies]
+gpui = { workspace = true }
+gpui_platform = { workspace = true }
+multi-workspace-core = { workspace = true }
+
+[lints]
+workspace = true

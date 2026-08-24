@@ -1,0 +1,22 @@
+[package]
+name = "ui"
+publish.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_macros.workspace = true
+#gpui_util.workspace = true
+guise-ui.workspace = true
+
+[lints]
+workspace = true

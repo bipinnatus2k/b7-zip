@@ -1,0 +1,19 @@
+[package]
+name = "etw_tracing_ui"
+publish = ["rsproxy-sparse"]
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+repository.workspace = true
+
+[dependencies]
+gpui.workspace = true
+etw_tracing.workspace = true
+
+[lints]
+workspace = true

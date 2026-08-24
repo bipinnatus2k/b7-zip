@@ -1,0 +1,29 @@
+[package]
+name = "workspace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bit7z-explorer.workspace = true
+bit7z-rs.workspace = true
+gpui.workspace = true
+guise-ui.workspace = true
+password.workspace = true
+rfd.workspace = true
+session.workspace = true
+task.workspace = true
+temp.workspace = true
+vfs.workspace = true
+windows.workspace = true
+app_action.workspace = true
+multi-workspace-core.workspace = true
+platform_title_bar.workspace = true
+util.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
