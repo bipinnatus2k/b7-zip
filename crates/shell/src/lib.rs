@@ -22,11 +22,9 @@
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::core::{
-    BOOL, GUID, HRESULT, IUnknown, IUnknownImpl, Interface, PCWSTR, PWSTR, Ref, implement, w,
-};
-use windows::Win32::Foundation::{E_FAIL, E_NOTIMPL, HMODULE};
+use windows::Win32::Foundation::{CloseHandle, E_FAIL, E_NOTIMPL, HMODULE};
 use windows::Win32::System::Com::{
     DVASPECT_CONTENT, FORMATETC, IClassFactory, IClassFactory_Impl, IDataObject, TYMED_HGLOBAL,
 };
@@ -38,13 +36,16 @@ use windows::Win32::System::Threading::{
     STARTUPINFOW,
 };
 use windows::Win32::UI::Shell::{
-    CMINVOKECOMMANDINFO, DragQueryFileW, HDROP, IContextMenu, IContextMenu_Impl, IShellExtInit,
-    IShellExtInit_Impl, SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify, SHDeleteKeyW,
-    SHGetValueW, SHSetValueW, ShellExecuteW,
+    CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, DragQueryFileW, HDROP, IContextMenu,
+    IContextMenu_Impl, IShellExtInit, IShellExtInit_Impl, SHCNE_ASSOCCHANGED, SHCNF_IDLIST,
+    SHChangeNotify, SHDeleteKeyW, SHGetValueW, SHSetValueW, ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, HMENU, InsertMenuItemW, MENUITEMINFOW, MFT_SEPARATOR, MIIM_FTYPE, MIIM_ID,
     MIIM_STRING, MIIM_SUBMENU, SW_HIDE, SW_SHOWNORMAL,
+};
+use windows::core::{
+    BOOL, GUID, HRESULT, IUnknown, IUnknownImpl, Interface, PCWSTR, PWSTR, Ref, implement, w,
 };
 
 /// The COM class id of this extension.
@@ -60,7 +61,9 @@ extern "system" fn DllMain(
     fdw_reason: u32,
     _lpv_reserved: *mut c_void,
 ) -> bool {
-    if fdw_reason == 1 /* DLL_PROCESS_ATTACH */ {
+    if fdw_reason == 1
+    /* DLL_PROCESS_ATTACH */
+    {
         let _ = DLL_INSTANCE.set(hinst_dll.0 as usize);
     }
     true
@@ -95,6 +98,8 @@ const CMD_HASH_SHA256: u32 = 12;
 const CMD_HASH_MD5: u32 = 13;
 const CMD_COUNT: u32 = 14;
 
+static JOB_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 /// `CMF_DEFAULTONLY`: Explorer asks whether the extension supplies a default
 /// verb. We don't, so don't add any menu items for this probe.
 const CMF_DEFAULTONLY: u32 = 0x0000_0001;
@@ -107,6 +112,9 @@ const GCS_VERBW: u32 = 0x0000_0004;
 const GCS_HELPTEXTW: u32 = 0x0000_0005;
 const GCS_VALIDATEW: u32 = 0x0000_0006;
 const GCS_UNICODE: u32 = 0x0000_0004;
+/// `CMIC_MASK_UNICODE`: the shell passed a `CMINVOKECOMMANDINFOEX` with wide
+/// string fields.
+const CMIC_MASK_UNICODE: u32 = 0x0000_4000;
 
 const FLAG_OPEN: u32 = 1 << CMD_OPEN;
 const FLAG_TEST: u32 = 1 << CMD_TEST;
@@ -126,8 +134,8 @@ const FLAG_ALL: u32 = (1 << CMD_COUNT) - 1;
 
 /// Well-known archive extensions (extension-only; no I/O inside Explorer).
 const ARCHIVE_EXTENSIONS: &[&str] = &[
-    "7z", "zip", "rar", "tar", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "wim", "iso",
-    "cab", "arj", "lzh", "lha", "dmg", "vhd", "vhdx", "wim", "001", "z", "lzma",
+    "7z", "zip", "rar", "tar", "gz", "tgz", "bz2", "tbz2", "tbz", "xz", "txz", "wim", "iso", "cab",
+    "arj", "lzh", "lha", "dmg", "vhd", "vhdx", "wim", "001", "z", "lzma",
 ];
 
 /// Context captured by `IShellExtInit::Initialize`.
@@ -227,7 +235,13 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
         }
 
         let inserted = if settings.cascaded {
-            insert_cascaded_menu(hmenu, index_menu, id_cmd_first, &settings.cascade_name, &plan)
+            insert_cascaded_menu(
+                hmenu,
+                index_menu,
+                id_cmd_first,
+                &settings.cascade_name,
+                &plan,
+            )
         } else {
             insert_flat_menu(hmenu, index_menu, id_cmd_first, &plan)
         };
@@ -259,17 +273,26 @@ impl IContextMenu_Impl for Bit7zMenu_Impl {
             return Ok(());
         }
         let verb_ptr = info.lpVerb.as_ptr() as usize;
-        let is_string_verb = (verb_ptr >> 16) != 0;
-        // `lpVerb` is either an integer resource id (low 16 bits) or an
-        // ANSI canonical-verb string returned by GetCommandString(GCS_VERBA).
+        // `lpVerb` is either an integer resource id (whose pointer value is
+        // <= 0xFFFF) or an ANSI/Wide canonical-verb string returned by
+        // GetCommandString.
+        let is_string_verb = verb_ptr > 0xFFFF;
+        let is_unicode = info.cbSize >= std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32
+            && info.fMask & CMIC_MASK_UNICODE != 0;
         let command_id = if is_string_verb {
-            let verb = unsafe {
-                std::ffi::CStr::from_ptr(info.lpVerb.as_ptr().cast::<std::ffi::c_char>())
+            let verb = if is_unicode {
+                let info = unsafe { &*(pici as *const CMINVOKECOMMANDINFOEX) };
+                unsafe { info.lpVerbW.to_string() }.ok()
+            } else {
+                let verb = unsafe {
+                    std::ffi::CStr::from_ptr(info.lpVerb.as_ptr().cast::<std::ffi::c_char>())
+                };
+                verb.to_str().ok().map(|s| s.to_string())
             };
-            let Ok(verb) = verb.to_str() else {
+            let Some(verb) = verb else {
                 return Ok(());
             };
-            let Some(command_id) = command_id_from_verb(verb) else {
+            let Some(command_id) = command_id_from_verb(&verb) else {
                 return Ok(());
             };
             command_id
@@ -353,9 +376,7 @@ fn command_verb(id_cmd: usize) -> Option<&'static str> {
 }
 
 fn command_id_from_verb(verb: &str) -> Option<u32> {
-    (0..CMD_COUNT).find(|&id| {
-        command_verb(id as usize).is_some_and(|candidate| candidate == verb)
-    })
+    (0..CMD_COUNT).find(|&id| command_verb(id as usize).is_some_and(|candidate| candidate == verb))
 }
 
 fn command_help(id_cmd: usize) -> Option<&'static str> {
@@ -468,6 +489,17 @@ fn archive_folder_name(path: &str) -> String {
         .to_string()
 }
 
+fn compress_target_stem(files: &[String]) -> String {
+    let stem = default_archive_stem(files);
+    // Recompressing a single archive to its own path would overwrite the
+    // input while it is being read.
+    if files.len() == 1 && is_archive_path(&files[0]) {
+        format!("{stem}_new")
+    } else {
+        stem
+    }
+}
+
 fn default_archive_stem(files: &[String]) -> String {
     if files.len() == 1 {
         let p = Path::new(&files[0]);
@@ -496,7 +528,7 @@ fn build_menu_plan(files: &[String], settings: &MenuSettings) -> Vec<MenuEntry> 
         return Vec::new();
     }
     let has_archive = selection_has_archive(files);
-    let stem = default_archive_stem(files);
+    let stem = compress_target_stem(files);
     let folder = if has_archive {
         archive_folder_name(&files[0])
     } else {
@@ -520,12 +552,7 @@ fn build_menu_plan(files: &[String], settings: &MenuSettings) -> Vec<MenuEntry> 
     };
 
     if has_archive {
-        push_cmd(
-            &mut plan,
-            CMD_OPEN,
-            FLAG_OPEN,
-            "Open archive".into(),
-        );
+        push_cmd(&mut plan, CMD_OPEN, FLAG_OPEN, "Open archive".into());
         push_sep(&mut plan);
         push_cmd(
             &mut plan,
@@ -550,12 +577,7 @@ fn build_menu_plan(files: &[String], settings: &MenuSettings) -> Vec<MenuEntry> 
         push_sep(&mut plan);
     }
 
-    push_cmd(
-        &mut plan,
-        CMD_ADD,
-        FLAG_ADD,
-        "Add to archive...".into(),
-    );
+    push_cmd(&mut plan, CMD_ADD, FLAG_ADD, "Add to archive...".into());
     push_cmd(
         &mut plan,
         CMD_ADD_TO_7Z,
@@ -591,24 +613,14 @@ fn build_menu_plan(files: &[String], settings: &MenuSettings) -> Vec<MenuEntry> 
             1 << CMD_HASH_CRC64,
             "CRC-64".into(),
         );
-        push_cmd(
-            &mut plan,
-            CMD_HASH_SHA1,
-            1 << CMD_HASH_SHA1,
-            "SHA-1".into(),
-        );
+        push_cmd(&mut plan, CMD_HASH_SHA1, 1 << CMD_HASH_SHA1, "SHA-1".into());
         push_cmd(
             &mut plan,
             CMD_HASH_SHA256,
             1 << CMD_HASH_SHA256,
             "SHA-256".into(),
         );
-        push_cmd(
-            &mut plan,
-            CMD_HASH_MD5,
-            1 << CMD_HASH_MD5,
-            "MD5".into(),
-        );
+        push_cmd(&mut plan, CMD_HASH_MD5, 1 << CMD_HASH_MD5, "MD5".into());
     }
 
     // Drop trailing separator if any.
@@ -645,7 +657,12 @@ fn insert_menu_command(hmenu: HMENU, index: u32, id: u32, label: &str) {
     }
 }
 
-fn insert_menu_entries(hmenu: HMENU, start_index: u32, id_cmd_first: u32, plan: &[MenuEntry]) -> u32 {
+fn insert_menu_entries(
+    hmenu: HMENU,
+    start_index: u32,
+    id_cmd_first: u32,
+    plan: &[MenuEntry],
+) -> u32 {
     let mut count = 0u32;
     for entry in plan {
         match entry {
@@ -740,7 +757,7 @@ fn run_command(command_id: u32, files: &[String]) -> Result<(), String> {
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
-    let stem = default_archive_stem(files);
+    let stem = compress_target_stem(files);
     let folder = archive_folder_name(&files[0]);
 
     match command_id {
@@ -751,31 +768,28 @@ fn run_command(command_id: u32, files: &[String]) -> Result<(), String> {
             // "Extract files..." — open the manager so the user can choose a target.
             return open_with_manager(&first).map_err(|e| e.to_string());
         }
-        CMD_EXTRACT_HERE => {
-            launch_job(task::JobSpec::Extract {
-                archive: first,
-                items: Vec::new(),
-                target: parent,
-                overwrite: task::OverwriteSpec::Ask,
-                password_hint: false,
-            })
-        }
-        CMD_EXTRACT_TO => {
-            launch_job(task::JobSpec::Extract {
-                archive: first,
-                items: Vec::new(),
-                target: parent.join(&folder),
-                overwrite: task::OverwriteSpec::Ask,
-                password_hint: false,
-            })
-        }
+        CMD_EXTRACT_HERE => launch_job(task::JobSpec::Extract {
+            archive: first,
+            items: Vec::new(),
+            target: parent,
+            overwrite: task::OverwriteSpec::Ask,
+            password_hint: false,
+        }),
+        CMD_EXTRACT_TO => launch_job(task::JobSpec::Extract {
+            archive: first,
+            items: Vec::new(),
+            target: parent.join(&folder),
+            overwrite: task::OverwriteSpec::Ask,
+            password_hint: false,
+        }),
         CMD_TEST => launch_job(task::JobSpec::Test {
             archive: first,
             password_hint: false,
         }),
         CMD_ADD => {
-            // Interactive compress: open the manager on the first selection.
-            return open_with_manager(&first).map_err(|e| e.to_string());
+            // Open the manager with the complete selection preloaded in its
+            // Add-to-archive dialog.
+            return open_with_manager_add(files).map_err(|e| e.to_string());
         }
         CMD_ADD_TO_7Z => launch_job(task::JobSpec::Compress {
             inputs: files.iter().map(PathBuf::from).collect(),
@@ -834,9 +848,13 @@ fn run_command(command_id: u32, files: &[String]) -> Result<(), String> {
 }
 
 fn launch_hash(files: &[String], algorithm: checksum::ChecksumAlgorithm) -> Result<(), String> {
-    // One job per selection item; first file drives a single visible progress window.
-    let path = PathBuf::from(&files[0]);
-    launch_job(task::JobSpec::Checksum { path, algorithm })
+    for file in files {
+        launch_job(task::JobSpec::Checksum {
+            path: PathBuf::from(file),
+            algorithm,
+        })?;
+    }
+    Ok(())
 }
 
 fn launch_job(spec: task::JobSpec) -> Result<(), String> {
@@ -850,12 +868,13 @@ fn launch_job(spec: task::JobSpec) -> Result<(), String> {
         return Err("cannot create jobs dir".into());
     };
     let job_id = format!(
-        "shell-{}-{}",
+        "shell-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
-            .unwrap_or(0)
+            .unwrap_or(0),
+        JOB_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
     let job_path = jobs_dir.join(format!("{job_id}.job.json"));
     let file = task::JobFile::new(job_id, spec);
@@ -893,10 +912,40 @@ fn launch_process(executor: &Path, job_path: &Path) -> Result<(), String> {
         )
     }
     .map_err(|e| format!("CreateProcessW: {e}"))?;
+    unsafe {
+        let _ = CloseHandle(pi.hThread);
+        let _ = CloseHandle(pi.hProcess);
+    }
     Ok(())
 }
 
 /// Open a path with the Bit7z file manager when present, else default association.
+fn open_with_manager_add(files: &[String]) -> windows::core::Result<()> {
+    let Some(manager) = find_sibling_exe("bit7zfm.exe") else {
+        return Err(windows::core::Error::from_hresult(HRESULT(
+            0x8007_0002u32 as i32,
+        )));
+    };
+    let app = windows::core::HSTRING::from(manager.as_path());
+    // The app binary accepts only positional file paths. Passing the
+    // selection positionally lets Workspace::open_paths preload its Add
+    // dialog without a dedicated app-level `--add` switch.
+    let mut parameters = String::new();
+    for file in files {
+        if !parameters.is_empty() {
+            parameters.push(' ');
+        }
+        parameters.push('"');
+        parameters.push_str(&file.replace('"', "\""));
+        parameters.push('"');
+    }
+    let params = windows::core::HSTRING::from(&parameters);
+    unsafe {
+        ShellExecuteW(None, w!("open"), &app, &params, None, SW_SHOWNORMAL);
+    }
+    Ok(())
+}
+
 fn open_with_manager(path: &Path) -> windows::core::Result<()> {
     if let Some(manager) = find_sibling_exe("bit7zfm.exe") {
         let app = windows::core::HSTRING::from(manager.as_path());
@@ -1084,7 +1133,10 @@ fn load_menu_settings() -> MenuSettings {
 
 fn get_reg_dword(subkey: &str, value_name: &str) -> Option<u32> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let mut data: u32 = 0;
     let mut cb = std::mem::size_of::<u32>() as u32;
     let mut ty: u32 = 0;
@@ -1098,16 +1150,15 @@ fn get_reg_dword(subkey: &str, value_name: &str) -> Option<u32> {
             Some(&mut cb as *mut u32),
         )
     };
-    if result.0 == 0 {
-        Some(data)
-    } else {
-        None
-    }
+    if result.0 == 0 { Some(data) } else { None }
 }
 
 fn get_reg_string(subkey: &str, value_name: &str) -> Option<String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let mut buf = vec![0u16; 256];
     let mut cb = (buf.len() * 2) as u32;
     let mut ty: u32 = 0;
@@ -1130,7 +1181,10 @@ fn get_reg_string(subkey: &str, value_name: &str) -> Option<String> {
 
 fn set_reg_dword(subkey: &str, value_name: &str, value: u32) -> Result<(), String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let data = value;
     // REG_DWORD = 4
     let result = unsafe {
@@ -1199,9 +1253,15 @@ fn unregister_server() -> Result<(), String> {
     let clsid = guid_string(&CLSID_BIT7Z_MENU);
     delete_reg_value(REG_APPROVED, &clsid)?;
     delete_reg_key(&format!("{REG_CLASSES}\\CLSID\\{clsid}"))?;
-    delete_reg_key(&format!("{REG_CLASSES}\\*\\shellex\\ContextMenuHandlers\\Bit7z"))?;
-    delete_reg_key(&format!("{REG_CLASSES}\\Directory\\shellex\\ContextMenuHandlers\\Bit7z"))?;
-    delete_reg_key(&format!("{REG_CLASSES}\\Directory\\Background\\shellex\\ContextMenuHandlers\\Bit7z"))?;
+    delete_reg_key(&format!(
+        "{REG_CLASSES}\\*\\shellex\\ContextMenuHandlers\\Bit7z"
+    ))?;
+    delete_reg_key(&format!(
+        "{REG_CLASSES}\\Directory\\shellex\\ContextMenuHandlers\\Bit7z"
+    ))?;
+    delete_reg_key(&format!(
+        "{REG_CLASSES}\\Directory\\Background\\shellex\\ContextMenuHandlers\\Bit7z"
+    ))?;
     // Remove the legacy static-verb fallback registered by older builds.
     delete_reg_key(&format!("{REG_CLASSES}\\*\\shell\\Bit7zFM"))?;
     delete_reg_key(&format!("{REG_CLASSES}\\Directory\\shell\\Bit7zFM"))?;
@@ -1214,7 +1274,10 @@ fn unregister_server() -> Result<(), String> {
 
 fn set_reg_value(subkey: &str, value_name: &str, value: &str) -> Result<(), String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let value_wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
     let result = unsafe {
         SHSetValueW(
@@ -1245,7 +1308,10 @@ fn delete_reg_key(subkey: &str) -> Result<(), String> {
 
 fn delete_reg_value(subkey: &str, value_name: &str) -> Result<(), String> {
     let subkey_wide: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-    let name_wide: Vec<u16> = value_name.encode_utf16().chain(std::iter::once(0)).collect();
+    let name_wide: Vec<u16> = value_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
     let result = unsafe {
         RegDeleteKeyValueW(
             HKEY_CURRENT_USER,
@@ -1260,7 +1326,6 @@ fn delete_reg_value(subkey: &str, value_name: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
 
 // ============================================================================
 // Tests
@@ -1407,7 +1472,6 @@ mod tests {
         assert!(invalid.is_err(), "unknown command ids must not validate");
     }
 
-
     #[test]
     fn get_command_string_returns_unicode_verbs() {
         let obj: IContextMenu = Bit7zMenu::new().into();
@@ -1421,10 +1485,17 @@ mod tests {
                 buf.len() as u32,
             )
         };
-        assert!(result.is_ok(), "GCS_VERBW must provide a canonical verb: {result:?}");
+        assert!(
+            result.is_ok(),
+            "GCS_VERBW must provide a canonical verb: {result:?}"
+        );
         let expected = "test".encode_utf16().collect::<Vec<_>>();
         assert_eq!(&buf[..expected.len()], expected.as_slice());
-        assert_eq!(buf[expected.len()], 0, "verb string must be null terminated");
+        assert_eq!(
+            buf[expected.len()],
+            0,
+            "verb string must be null terminated"
+        );
     }
 
     #[test]

@@ -13,9 +13,9 @@
 
 use archive_vfs as archive_vfs_crate;
 use bit7z_rs::{ArchiveEngine, ArchiveError};
-use password::Password;
 use fs::FsTree;
-use fs_watcher::{FsEvent, FsWatcher, WatchConfig};
+use fs_watcher::{FsEvent, FsEventKind, FsWatcher, WatchConfig};
+use password::Password;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vfs::{Changeset, Overlay};
@@ -45,6 +45,10 @@ impl ArchiveSession {
         let overlay = Overlay::new(tree);
 
         let work_dir = temp::session_dir(id);
+        // Session directories are derived from a predictable id. Start from
+        // an empty directory so stale files from a previous run/instance can
+        // never leak into the new overlay.
+        let _ = std::fs::remove_dir_all(&work_dir);
         std::fs::create_dir_all(&work_dir)?;
 
         let fs_tree = FsTree::scan(&work_dir)?;
@@ -94,16 +98,30 @@ impl ArchiveSession {
             .values()
             .find(|n| n.archive_index() == Some(archive_index))
             .ok_or_else(|| SessionError::EntryNotFound(archive_index))?;
-        let path = self.overlay.base().path_of(entry.id).unwrap_or_else(|| entry.name.clone());
+        let path = self
+            .overlay
+            .base()
+            .path_of(entry.id)
+            .unwrap_or_else(|| entry.name.clone());
         // Mirror the archive-relative path inside the working directory,
         // sanitized so it cannot escape it.
-        let target = self.work_dir.join(temp::sanitize_relative(Path::new(&path)));
+        let target = self
+            .work_dir
+            .join(temp::sanitize_relative(Path::new(&path)));
 
-        let bytes = self.engine.extract_to_buffer(&self.archive_path, archive_index, self.password.as_ref())?;
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&target, bytes)?;
+        // Extract straight to disk instead of buffering the whole entry in
+        // memory. bit7z's SafeOutPathBuilder also guards against path
+        // traversal while writing under `work_dir`.
+        self.engine.extract(
+            &self.archive_path,
+            &[archive_index],
+            &self.work_dir,
+            self.password.as_ref(),
+            &bit7z_rs::ExtractOptions {
+                overwrite: bit7z_rs::OverwriteMode::Overwrite,
+                ..Default::default()
+            },
+        )?;
         // Register the new file in the fs tree so later Modify events can
         // find it (the watcher only sees changes *after* this point).
         let event = FsEvent {
@@ -117,19 +135,45 @@ impl ArchiveSession {
 
     /// Drain pending watcher events into the fs tree, then sync the overlay.
     pub fn poll_events(&mut self) {
+        let mut events = Vec::new();
         if let Some(watcher) = &self.watcher {
             while let Ok(event) = watcher.try_recv() {
-                let _ = self.fs_tree.apply_event(&event);
+                events.push(event);
             }
         }
-        // Always re-sync: the fs tree is authoritative for the working dir,
-        // and sync is idempotent (unchanged nodes stay clean).
-        self.overlay.sync_from(self.fs_tree.tree());
+        for event in events {
+            self.apply_event(&event);
+        }
     }
 
     /// Apply a single event (used by tests and headless drivers).
     pub fn apply_event(&mut self, event: &FsEvent) {
+        let new_rel = event
+            .path
+            .strip_prefix(&self.work_dir)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"));
+        let from_rel = match &event.kind {
+            FsEventKind::Rename { from } => from
+                .strip_prefix(&self.work_dir)
+                .ok()
+                .map(|p| p.to_string_lossy().replace('\\', "/")),
+            _ => None,
+        };
+
         if self.fs_tree.apply_event(event).is_ok() {
+            // Explicit filesystem removals must be reflected as overlay
+            // deletions; `sync_from` alone only adds/modifies.
+            if matches!(event.kind, FsEventKind::Remove)
+                && let Some(path) = new_rel.as_deref()
+            {
+                self.overlay.remove_path(path);
+            }
+            if matches!(event.kind, FsEventKind::Rename { .. })
+                && let (Some(from), Some(to)) = (from_rel.as_deref(), new_rel.as_deref())
+            {
+                let _ = self.overlay.rename_path(from, to);
+            }
             self.overlay.sync_from(self.fs_tree.tree());
         }
     }
@@ -152,6 +196,10 @@ impl ArchiveSession {
     pub fn commit(&mut self) -> Result<(), SessionError> {
         let changeset = self.changeset();
         if changeset.is_empty() {
+            // Dirty entries that cannot be mapped to archive operations
+            // (e.g. a modified synthetic directory) must not leave the
+            // session permanently dirty.
+            self.overlay.on_commit_success();
             return Ok(());
         }
         let ops = task::changeset_to_ops(&changeset);
@@ -170,11 +218,24 @@ impl ArchiveSession {
     /// manager after operations that modify the archive in place (delete,
     /// rename, ...) so the view reflects the new contents.
     pub fn reload(&mut self) -> Result<(), SessionError> {
-        let entries = self.engine.list(&self.archive_path, self.password.as_ref())?;
+        let entries = self
+            .engine
+            .list(&self.archive_path, self.password.as_ref())?;
         let tree = archive_vfs_crate::build_tree(&entries);
         self.overlay = Overlay::new(tree);
         self.fs_tree = FsTree::scan(&self.work_dir)?;
+        // Re-apply local files from the working directory onto the fresh
+        // archive tree so unsaved edits survive a reload as dirty nodes.
+        self.overlay.sync_from(self.fs_tree.tree());
         Ok(())
+    }
+}
+
+impl Drop for ArchiveSession {
+    fn drop(&mut self) {
+        // Stop watching before deleting the watched directory.
+        self.watcher.take();
+        let _ = std::fs::remove_dir_all(&self.work_dir);
     }
 }
 
@@ -190,5 +251,3 @@ pub enum SessionError {
     #[error("session already exists: {0}")]
     SessionExists(u64),
 }
-
-pub use crate::store::{SessionId, SessionStore, next_archive_id};

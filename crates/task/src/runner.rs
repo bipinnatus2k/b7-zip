@@ -5,7 +5,7 @@ use crate::job::{JobSpec, OverwriteSpec};
 use bit7z_rs::{ArchiveEngine, CompressOptions, EngineOp, ExtractOptions, OverwriteMode};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 
 /// Events emitted while a task runs.
 #[derive(Debug, Clone)]
@@ -14,6 +14,12 @@ pub enum TaskEvent {
     Progress { processed: u64, total: u64 },
     /// A file is being processed.
     FileStarted { path: String },
+    /// An extraction found an existing file and needs an overwrite decision.
+    /// The receiver is answered with `true` (overwrite) or `false` (skip).
+    OverwriteConflict {
+        path: String,
+        reply: SyncSender<bool>,
+    },
     /// The task finished (success or failure with a message).
     Finished { success: bool, message: String },
 }
@@ -71,7 +77,13 @@ fn run_job(
     cancel: &Arc<AtomicBool>,
 ) -> Result<(), bit7z_rs::ArchiveError> {
     match job {
-        JobSpec::Extract { archive, items, target, overwrite, .. } => {
+        JobSpec::Extract {
+            archive,
+            items,
+            target,
+            overwrite,
+            ..
+        } => {
             std::fs::create_dir_all(target)?;
             let progress = {
                 let tx = tx.clone();
@@ -87,11 +99,26 @@ fn run_job(
                     });
                 }) as Arc<dyn Fn(&str) + Send + Sync>
             };
+            let on_conflict = if *overwrite == OverwriteSpec::Ask {
+                let tx = tx.clone();
+                Some(Arc::new(move |path: &str| -> bool {
+                    let (reply, answer) = sync_channel(1);
+                    let _ = tx.send(TaskEvent::OverwriteConflict {
+                        path: path.to_string(),
+                        reply,
+                    });
+                    answer.recv().unwrap_or(false)
+                })
+                    as Arc<dyn Fn(&str) -> bool + Send + Sync>)
+            } else {
+                None
+            };
             let options = ExtractOptions {
                 overwrite: (*overwrite).into(),
                 cancel: Some(cancel.clone()),
                 progress: Some(progress),
                 file: Some(file),
+                on_conflict,
             };
             // An empty item list means "extract everything"; resolve it to the
             // full index set (an empty slice would be UB at the FFI boundary).
@@ -155,9 +182,7 @@ fn run_job(
             } else {
                 Err(bit7z_rs::ArchiveError::Engine(format!(
                     "{}/{} items failed: {:?}",
-                    result.failed_count,
-                    result.total,
-                    result.errors
+                    result.failed_count, result.total, result.errors
                 )))
             }
         }
@@ -171,14 +196,21 @@ fn run_job(
                 .collect();
             engine.update(archive, &ops, password)
         }
-        JobSpec::Delete { archive, indices, .. } => {
+        JobSpec::Delete {
+            archive, indices, ..
+        } => {
             let ops: Vec<EngineOp> = indices
                 .iter()
                 .map(|i| EngineOp::Delete { archive_index: *i })
                 .collect();
             engine.update(archive, &ops, password)
         }
-        JobSpec::Rename { archive, index, new_path, .. } => {
+        JobSpec::Rename {
+            archive,
+            index,
+            new_path,
+            ..
+        } => {
             let ops = vec![EngineOp::Rename {
                 archive_index: *index,
                 new_path: new_path.clone(),
@@ -201,7 +233,7 @@ fn run_job(
                 total: result.size,
             });
             Ok(())
-        },
+        }
     }
 }
 

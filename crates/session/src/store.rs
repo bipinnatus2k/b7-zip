@@ -1,6 +1,7 @@
 //! Session storage: keeps open archive sessions alive for the manager GUI.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,7 +30,10 @@ impl SessionStore {
     }
 
     /// Insert a session; fails if the id is already taken.
-    pub fn insert(&self, session: ArchiveSession) -> Result<Arc<Mutex<ArchiveSession>>, crate::SessionError> {
+    pub fn insert(
+        &self,
+        session: ArchiveSession,
+    ) -> Result<Arc<Mutex<ArchiveSession>>, crate::SessionError> {
         let id = session.id();
         let arc = Arc::new(Mutex::new(session));
         let mut map = self.sessions.lock().expect("session store lock poisoned");
@@ -42,31 +46,52 @@ impl SessionStore {
 
     /// Get a session by id.
     pub fn get(&self, id: SessionId) -> Option<Arc<Mutex<ArchiveSession>>> {
-        self.sessions.lock().expect("session store lock poisoned").get(&id).cloned()
+        self.sessions
+            .lock()
+            .expect("session store lock poisoned")
+            .get(&id)
+            .cloned()
     }
 
     /// Remove a session and return it.
     pub fn remove(&self, id: SessionId) -> Option<Arc<Mutex<ArchiveSession>>> {
-        self.sessions.lock().expect("session store lock poisoned").remove(&id)
+        self.sessions
+            .lock()
+            .expect("session store lock poisoned")
+            .remove(&id)
     }
 
     /// Whether the store contains the session.
     pub fn contains(&self, id: SessionId) -> bool {
-        self.sessions.lock().expect("session store lock poisoned").contains_key(&id)
+        self.sessions
+            .lock()
+            .expect("session store lock poisoned")
+            .contains_key(&id)
     }
 
     /// All session ids.
     pub fn all(&self) -> Vec<SessionId> {
-        self.sessions.lock().expect("session store lock poisoned").keys().copied().collect()
+        self.sessions
+            .lock()
+            .expect("session store lock poisoned")
+            .keys()
+            .copied()
+            .collect()
     }
 
     /// Remove all sessions (used on shutdown).
     pub fn clear(&self) {
-        self.sessions.lock().expect("session store lock poisoned").clear();
+        self.sessions
+            .lock()
+            .expect("session store lock poisoned")
+            .clear();
     }
 }
 
-/// Helper for tests and tooling: build an id from a path.
+/// Helper for tests and tooling: build a stable id from a path.
+#[allow(dead_code)]
 pub fn session_id_for(path: &PathBuf) -> u64 {
-    next_archive_id()
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
 }
