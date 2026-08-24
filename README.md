@@ -146,8 +146,8 @@ powershell -ExecutionPolicy Bypass -File scripts/package.ps1
 ```
 
 Assembles `dist/Bit7zFM-0.1.0/` with `bit7zfm.exe`,
-`bit7z-executor.exe`, `shell.dll`, `7zip.dll`, embeds the DPI manifest
-into the exes, and registers the shell extension.
+`bit7z-executor.exe`, `bit7z.exe`, `shell.dll`, `7zip.dll`, embeds the DPI
+manifest into the exes, and registers the shell extension.
 
 ## CLI examples
 

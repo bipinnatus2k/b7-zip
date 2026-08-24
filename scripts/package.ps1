@@ -14,7 +14,7 @@ Set-Location $root
 # 1. Release build
 # ---------------------------------------------------------------------------
 Write-Host '[1/5] cargo build --release (offline)...'
-cargo build --release --offline
+cargo build --release --workspace --offline
 if ($LASTEXITCODE -ne 0) { throw 'release build failed' }
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,7 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item (Join-Path $root 'target/release/bit7zfm.exe') $dist
 Copy-Item (Join-Path $root 'target/release/bit7z-executor.exe') $dist
 Copy-Item (Join-Path $root 'target/release/shell.dll') $dist
+Copy-Item (Join-Path $root 'target/release/bit7z.exe') $dist
 Copy-Item $sevenZip $dist
 Copy-Item (Join-Path $root 'crates/resources/bit7z.ico') $dist
 
@@ -68,11 +69,10 @@ Get-ChildItem $dist | ForEach-Object { Write-Host ("    " + $_.Name + "  " + $_.
 # 5. Register the shell extension (HKCU, no admin)
 # ---------------------------------------------------------------------------
 Write-Host '[4/5] registering shell context menu...'
-& (Join-Path $dist 'bit7z.exe') shell-install 2>$null
 if (Test-Path (Join-Path $dist 'bit7z.exe')) {
     & (Join-Path $dist 'bit7z.exe') shell-install
 } else {
-    Write-Host '    (bit7z.exe not shipped; run "cargo run -p cli -- shell-install" to register)'
+    Write-Host '    (bit7z.exe missing; run regsvr32 shell.dll manually)'
 }
 
 Write-Host '[5/5] done:'

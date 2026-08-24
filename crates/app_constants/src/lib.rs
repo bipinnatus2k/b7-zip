@@ -2,8 +2,8 @@
 /// The application name, used to derive platform-specific data, config, cache,
 /// and state directory paths.
 ///
-/// Forks should change this to avoid colliding with Zed's user data.
-pub const APP_NAME: &str = "Bit7zFM";
+/// Forks should change this to avoid colliding with Application's user data.
+pub const APP_NAME: &str = "bit7zfm" ;
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
 /// Linux/FreeBSD and the macOS `~/.config` fallback.

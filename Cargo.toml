@@ -4,19 +4,28 @@ resolver = "3"
 members = [
     "app",
     "cli",
+    "crates/app_action",
     "crates/app_constants",
+    "crates/platform_title_bar",
     "crates/archive_vfs",
     "crates/assets",
     "crates/bit7z",
     "crates/checksum",
     "crates/crashes",
+    "crates/etw_tracing",
+    "crates/etw_tracing_ui",
     "crates/explorer",
+    "crates/multi-workspace-core",
+    "crates/explorer_model",
+    "crates/explorer_view",
     "crates/ffi",
     "crates/format_detector",
     "crates/fs",
     "crates/fs_watcher",
+    "crates/net",
     "crates/password",
     "crates/paths",
+    "crates/release_channel",
     "crates/session",
     "crates/shell",
     "crates/system_specs",
@@ -26,7 +35,12 @@ members = [
     "crates/thirdparties/guise/crates/guise",
     "crates/tray",
     "crates/vfs",
-    "executor",
+    "crates/workspace",
+    "crates/zlog",
+    #    "crates/zlog_settings",
+    "crates/ztracing",
+    "crates/ztracing_macro",
+    "executor", "crates/ui", "crates/multi-workspace-demo",
 ]
 
 exclude = ["crates/thirdparties/guise"]
@@ -46,6 +60,7 @@ repository = ""
 
 [workspace.dependencies]
 anyhow = "1"
+app_action = { path = "crates/app_action" }
 app_constants = { path = "crates/app_constants" }
 archive_vfs = { path = "crates/archive_vfs" }
 assets = { path = "crates/assets" }
@@ -55,40 +70,64 @@ bit7z-explorer = { path = "crates/explorer" }
 bit7z-ffi = { path = "crates/ffi" }
 bit7z-rs = { path = "crates/bit7z" }
 checksum = { path = "crates/checksum" }
+chrono = { version = "*" }
 clap = { version = "4", features = ["derive"] }
+collections = { git = "https://github.com/zed-industries/zed" }
 const_format = "0.2"
 crash-handler = "0.7"
+crashes = { path = "crates/crashes" }
 dirs = "6.0"
+etw_tracing = { path = "crates/etw_tracing" }
+etw_tracing_ui = { path = "crates/etw_tracing_ui" }
+explorer-model = { path = "crates/explorer_model" }
+explorer-view = { path = "crates/explorer_view" }
 fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }
 futures = "0.3"
+multi-workspace-core = { path = "crates/multi-workspace-core" }
+smallvec = {version = "*"}
 gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-tray = { path = "crates/thirdparties/gpui-tray" }
+gpui_macros = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
 guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
+ui = { path = "crates/ui" }
 human_bytes = "0.4.3"
 ignore = "0.4.22"
+platform_title_bar = { path = "crates/platform_title_bar" }
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
 log = "0.4.33"
 mach2 = "0.5"
 minidumper = "0.9"
+net = { path = "crates/net" }
 parking_lot = "0.12.5"
 password = { path = "crates/password" }
+paths = { path = "crates/paths" }
 pciid-parser = "0.8.1"
+release_channel = { path = "crates/release_channel" }
 rfd = { version = "0.15", default-features = false }
 rust-embed = { version = "8.11", features = ["include-exclude"] }
+schemars = { version = "1.0", features = ["indexmap2"] }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
 session = { path = "crates/session" }
+smol = "2.0.2"
 sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
 task = { path = "crates/task" }
 temp = { path = "crates/temp" }
+tempfile = "3"
 thiserror = "2.0.19"
+tracing = "0.1"
 util = { git = "https://github.com/zed-industries/zed" }
 vfs = { path = "crates/vfs" }
+workspace = { path = "crates/workspace" }
+zlog = { path = "crates/zlog" }
 zstd = "0.11"
+ztracing = { path = "crates/ztracing" }
+ztracing_macro = { path = "crates/ztracing_macro" }
 
 [workspace.dependencies.windows]
 version = "0.61"
