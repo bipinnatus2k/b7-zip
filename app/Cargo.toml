@@ -9,24 +9,47 @@ version.workspace = true
 name = "bit7zfm"
 path = "src/main.rs"
 
-[dependencies]
-app_constants.workspace = true
-bit7z-explorer.workspace = true
-bit7z-rs.workspace = true
-clap.workspace = true
-password.workspace = true
-session.workspace = true
-task.workspace = true
-temp.workspace = true
-vfs.workspace = true
-guise-ui.workspace = true
-rfd.workspace = true
-gpui.workspace = true
-gpui_platform.workspace = true
-assets.workspace = true
-
 [target.'cfg(target_os = "linux")'.dependencies]
 rfd = { version = "0.15", features = ["xdg-portal", "async-std"] }
 
+[dependencies]
+anyhow.workspace = true
+app_constants.workspace = true
+assets.workspace = true
+bit7z-explorer.workspace = true
+bit7z-rs.workspace = true
+clap.workspace = true
+collections.workspace = true
+crash-handler.workspace = true
+crashes.workspace = true
+etw_tracing_ui.workspace = true
+futures = "0.3.33"
+gpui.workspace = true
+gpui_platform.workspace = true
+guise-ui.workspace = true
+log.workspace = true
+mimalloc = { version = "0.1.52" }
+parking_lot.workspace = true
+password.workspace = true
+paths.workspace = true
+rayon = "1.10.0"
+rfd.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+session.workspace = true
+smol.workspace = true
+system_specs.workspace = true
+task.workspace = true
+temp.workspace = true
+util.workspace = true
+uuid = { version = "1.20.0", features = ["v4"] }
+vfs.workspace = true
+windows.workspace = true
+workspace.workspace = true
+zlog.workspace = true
+ztracing.workspace = true
+release_channel.workspace = true
+schemars = "1.2.2"
 [lints]
 workspace = true
