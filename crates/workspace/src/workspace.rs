@@ -1,6 +1,11 @@
-use gpui::{div, AnyView, AnyWeakView, Context, Div, Entity, EventEmitter, IntoElement, Render, Subscription, WeakEntity, Window, Styled, ParentElement};
-use gpui::prelude::FluentBuilder;
-use guise::panegroup::Pane;
+use bit7z_rs::{ArchiveEngine};
+use explorer_view::ArchiveExplorer;
+use gpui::{div, px, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled, Window};
+use guise::theme::Size;
+use guise::Text;
+use session::ArchiveSession;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 #[derive(
     Clone,
@@ -29,160 +34,103 @@ impl From<WorkspaceId> for i64 {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum CloseIntent {
-    /// Quit the program entirely.
-    Quit,
-    /// Close a window.
-    CloseWindow,
-    /// Replace the workspace in an existing window.
-    ReplaceWindow,
+enum WorkspaceState {
+    /// No archive loaded — the landing view of a fresh tab.
+    Welcome,
+    /// An opened archive with its browsable file table.
+    Open {
+        path: PathBuf,
+        explorer: Entity<ArchiveExplorer>,
+    },
+    /// The archive could not be opened; the tab stays so the user sees why.
+    Failed { message: SharedString },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OpenMode {
-    /// Open the workspace in a new window.
-    NewWindow,
-    /// Add to the window's multi workspace without activating it (used during deserialization).
-    Add,
-    /// Add to the window's multi workspace and activate it.
-    #[default]
-    Activate,
-}
-
+/// One tab in the [`crate::multi_workspace::MultiWorkspace`] window.
 pub struct Workspace {
-    workspace_actions: Vec<Box<dyn Fn(Div, &Workspace, &mut Window, &mut Context<Self>) -> Div>>,
-    zoomed: Option<AnyWeakView>,
-    _subscriptions: Vec<Subscription>,
-    workspace_id: Option<WorkspaceId>
+    workspace_id: Option<WorkspaceId>,
+    title: SharedString,
+    state: WorkspaceState,
 }
 
 impl Workspace {
-
-    pub fn new(
-        workspace_id: Option<WorkspaceId>,
-        // window: &mut Window,
-        cx: &mut Context<Self>
-    ) -> Self {
-        let weak_handle = cx.entity().downgrade();
-
-        cx.emit(Event::WorkspaceCreated(weak_handle.clone()));
-
-        // let multi_workspace = window
-        //     .root::<MultiWorkspace>()
-        //     .flatten()
-        //     .map(|mw| mw.downgrade());
-
-        let subscriptions = vec![
-            // cx.observe_window_activation(window, Self::on_window_activation_changed),
-            // cx.observe_window_bounds(window, move |this, window, cx| {
-            //     if !window.is_window_active() {
-            //         return;
-            //     }
-            //     if this.bounds_save_task_queued.is_some() {
-            //         return;
-            //     }
-            //     this.bounds_save_task_queued = Some(cx.spawn_in(window, async move |this, cx| {
-            //         cx.background_executor()
-            //             .timer(Duration::from_millis(100))
-            //             .await;
-            //         this.update_in(cx, |this, window, cx| {
-            //             this.save_window_bounds(window, cx).detach();
-            //             this.bounds_save_task_queued.take();
-            //         })
-            //             .ok();
-            //     }));
-            //     cx.notify();
-            // }),
-            // cx.observe_window_appearance(window, |_, window, cx| {
-            //     let window_appearance = window.appearance();
-            //
-            //     *SystemAppearance::global_mut(cx) = SystemAppearance(window_appearance.into());
-            //
-            //     theme_settings::reload_theme(cx);
-            //     theme_settings::reload_icon_theme(cx);
-            // }),
-            // cx.on_release({
-            //     let weak_handle = weak_handle.clone();
-            //     move |this, cx| {
-            //         this.app_state.workspace_store.update(cx, move |store, _| {
-            //             store.workspaces.retain(|(_, weak)| weak != &weak_handle);
-            //         })
-            //     }
-            // }),
-        ];
-
-
+    /// A tab with no content yet: shows the welcome page.
+    pub fn welcome(workspace_id: Option<WorkspaceId>) -> Self {
         Self {
-            // weak_self: weak_handle.clone(),
             workspace_id,
-            zoomed: None,
-            // zoomed_position: None,
-            // maximized_pane: None,
-            // previous_dock_drag_coordinates: None,
-            // center,
-            // panes: vec![center_pane.clone()],
-            // panes_by_item: Default::default(),
-            // active_pane: center_pane.clone(),
-            // last_active_center_pane: Some(center_pane.downgrade()),
-            // last_active_view_id: None,
-            // status_bar,
-            // modal_layer,
-            // toast_layer,
-            // titlebar_item: None,
-            // titlebar_focus_handle: cx.focus_handle(),
-            // region_focus_handles: RegionFocusHandles::new(cx),
-            // notifications: Notifications::default(),
-            // suppressed_notifications: HashSet::default(),
-            // left_dock,
-            // bottom_dock,
-            // right_dock,
-            // _panels_task: None,
-            // project: project.clone(),
-            // follower_states: Default::default(),
-            // last_leaders_by_pane: Default::default(),
-            // auto_watch: AutoWatch::Off,
-            // dispatching_keystrokes: Default::default(),
-            // window_edited: false,
-            // last_window_title: None,
-            // dirty_items: Default::default(),
-            // active_call,
-            // database_id: workspace_id,
-            // app_state,
-            // _observe_current_user,
-            // _apply_leader_updates,
-            // _schedule_serialize_workspace: None,
-            // _serialize_workspace_task: None,
-            // _schedule_serialize_ssh_paths: None,
-            // leader_updates_tx,
-            _subscriptions: subscriptions,
-            // pane_history_timestamp,
-            workspace_actions: Default::default(),
-            // This data will be incorrect, but it will be overwritten by the time it needs to be used.
-            // bounds: Default::default(),
-            // centered_layout: false,
-            // bounds_save_task_queued: None,
-            // on_prompt_for_new_path: None,
-            // on_prompt_for_open_path: None,
-            // terminal_provider: None,
-            // debugger_provider: None,
-            // serializable_items_tx,
-            // _items_serializer,
-            // session_id: Some(session_id),
-            //
-            // scheduled_tasks: Vec::new(),
-            // last_open_dock_positions: Vec::new(),
-            // removing: false,
-            // sidebar_focus_handle: None,
-            // multi_workspace,
-            // active_workspace_id: None,
-            // active_worktree_creation: ActiveWorktreeCreation::default(),
-            // open_in_dev_container: false,
-            // _dev_container_task: None,
-            // deferred_save_items: Vec::new(),
+            title: "Welcome".into(),
+            state: WorkspaceState::Welcome,
         }
     }
-    
+
+    /// Opens `archive_path` through `engine` and shows it in an
+    /// [`ArchiveExplorer`] table. On failure the tab switches to an error
+    /// page instead of disappearing.
+    pub fn open_archive(
+        workspace_id: Option<WorkspaceId>,
+        archive_path: &Path,
+        engine: &Arc<dyn ArchiveEngine>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let title = display_title(archive_path);
+        match ArchiveSession::open(session::next_archive_id(), engine.clone(), archive_path, None) {
+            Ok(archive_session) => {
+                let explorer = ArchiveExplorer::new(Arc::new(Mutex::new(archive_session)), cx);
+                Self {
+                    workspace_id,
+                    title: title.into(),
+                    state: WorkspaceState::Open {
+                        path: archive_path.to_path_buf(),
+                        explorer,
+                    },
+                }
+            }
+            Err(error) => Self {
+                workspace_id,
+                title: title.into(),
+                state: WorkspaceState::Failed {
+                    message: SharedString::from(format!(
+                        "Failed to open {}: {error}",
+                        archive_path.display()
+                    )),
+                },
+            },
+        }
+    }
+
+    /// A tab explaining why an archive could not even be attempted (e.g.
+    /// the engine DLL failed to load).
+    pub fn failed(workspace_id: Option<WorkspaceId>, archive_path: &Path, reason: SharedString) -> Self {
+        Self {
+            workspace_id,
+            title: display_title(archive_path).into(),
+            state: WorkspaceState::Failed {
+                message: SharedString::from(format!(
+                    "Failed to open {}: {reason}",
+                    archive_path.display()
+                )),
+            },
+        }
+    }
+
+    pub fn workspace_id(&self) -> Option<WorkspaceId> {
+        self.workspace_id
+    }
+
+    /// Tab-strip label.
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn is_welcome(&self) -> bool {
+        matches!(self.state, WorkspaceState::Welcome)
+    }
+}
+
+fn display_title(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 impl Render for Workspace {
@@ -190,23 +138,55 @@ impl Render for Workspace {
         div()
             .size_full()
             .flex()
-            .items_center()
-            .justify_center()
-            .when_some(self.workspace_id, |x, t| {
-                x.child(format!("Workspace {}", t.0))
+            .flex_col()
+            .overflow_hidden()
+            .child(match &self.state {
+                WorkspaceState::Welcome => welcome_page(),
+                WorkspaceState::Open { path, explorer } => div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w_full()
+                            .px(px(12.))
+                            .py(px(6.))
+                            .child(Text::new(path.to_string_lossy()).size(Size::Sm).dimmed()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .overflow_hidden()
+                            .child(explorer.clone()),
+                    ),
+                WorkspaceState::Failed { message } => div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(32.))
+                    .child(Text::new(message.clone())),
             })
     }
 }
 
-
-impl EventEmitter<Event> for Workspace {}
-
-pub enum Event {
-    PaneAdded(Entity<Pane>),
-    PaneRemoved,
-    WorkspaceCreated(WeakEntity<Workspace>),
-    ZoomChanged,
-    Activate,
-    PanelAdded(AnyView),
+fn welcome_page() -> gpui::Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(10.))
+        .child(Text::new("Bit7zFM").size(Size::Xl).bold())
+        .child(Text::new("A 7-Zip / WinRAR class archive manager").dimmed())
+        .child(
+            Text::new(
+                "Open an archive from the command line, or press + for a new tab.",
+            )
+            .size(Size::Sm)
+            .dimmed(),
+        )
 }
-

@@ -1,8 +1,13 @@
-use gpui::{div, px, AppContext, Context, Entity, EntityId, EventEmitter, IntoElement, ParentElement, Render, Styled, WeakEntity, Window};
-use guise::{theme, AppShell, TabBar, TabBarEvent, Text};
+use bit7z_rs::{ArchiveEngine, Bit7zEngine};
+use gpui::{div, px, AppContext, Context, Entity, EntityId, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window};
+use guise::{AppShell, TabBar, TabBarEvent, Text};
 use platform_title_bar::{DEFAULT_TITLE_BAR_HEIGHT, PlatformTitleBar};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::workspace::{Workspace, WorkspaceId};
+
+const ENGINE_UNAVAILABLE: &str = "the 7-Zip engine could not be loaded";
 
 pub enum MultiWorkspaceEvent {
     ActiveWorkspaceChanged {
@@ -21,6 +26,8 @@ pub struct MultiWorkspace {
     workspaces: Vec<Entity<Workspace>>,
     tab_bar: Entity<TabBar>,
     title_bar: Entity<PlatformTitleBar>,
+    /// Shared archive engine; `None` when the 7-Zip DLL failed to load.
+    engine: Option<Arc<dyn ArchiveEngine>>,
     active: usize,
     next_id: i64,
 }
@@ -28,12 +35,10 @@ pub struct MultiWorkspace {
 impl EventEmitter<MultiWorkspaceEvent> for MultiWorkspace {}
 
 impl MultiWorkspace {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let title_bar: Entity<PlatformTitleBar> = cx.new(|cx| {
-            PlatformTitleBar::new("app-title-bar")
-                .background(theme(cx).surface().hsla())
-                .child(Text::new("App title bar"))
-        });
+    /// Creates the window content. One tab per path in `paths`; a single
+    /// welcome tab when no paths were passed.
+    pub fn new(paths: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
+        let title_bar = cx.new(|_| PlatformTitleBar::new("app-title-bar"));
 
         let tab_bar = cx.new(|cx| TabBar::new(cx));
         cx.subscribe(&tab_bar, |this, _bar, event: &TabBarEvent, cx| match event {
@@ -43,29 +48,58 @@ impl MultiWorkspace {
         })
         .detach();
 
+        let engine = Bit7zEngine::new(None)
+            .ok()
+            .map(|engine| Arc::new(engine) as Arc<dyn ArchiveEngine>);
+
         let mut this = Self {
             workspaces: Vec::new(),
             tab_bar,
             title_bar,
+            engine,
             active: 0,
-             next_id: 0,
+            next_id: 0,
         };
-        this.add_workspace(cx);
+        if paths.is_empty() {
+            this.add_workspace(cx);
+        } else {
+            this.open_paths(&paths, cx);
+        }
         this
     }
 
-    /// Creates a fresh untitled workspace, appends it as a new tab and
-    /// activates it.
+    /// Opens one tab per path. Paths that cannot be opened still get a tab
+    /// so the failure is visible instead of silently dropped.
+    pub fn open_paths(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        for path in paths {
+            self.open_path(path, cx);
+        }
+    }
+
+    /// Opens `path` in a new tab and activates it.
+    pub fn open_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.next_id += 1;
+        let id = WorkspaceId::from_i64(self.next_id);
+        let workspace = match self.engine.clone() {
+            Some(engine) => cx.new(|cx| Workspace::open_archive(Some(id), path, &engine, cx)),
+            None => cx.new(|_| Workspace::failed(Some(id), path, ENGINE_UNAVAILABLE.into())),
+        };
+        self.attach_tab(workspace, cx);
+    }
+
+    /// The trailing `+` button / fresh-tab entry point: a welcome page tab.
     pub fn add_workspace(&mut self, cx: &mut Context<Self>) {
         self.next_id += 1;
         let id = WorkspaceId::from_i64(self.next_id);
-        let workspace = cx.new(|cx| Workspace::new(Some(id), cx));
+        let workspace = cx.new(|_| Workspace::welcome(Some(id)));
+        self.attach_tab(workspace, cx);
+    }
 
+    fn attach_tab(&mut self, workspace: Entity<Workspace>, cx: &mut Context<Self>) {
+        let title: SharedString = workspace.read(cx).title().to_owned().into();
         self.workspaces.push(workspace.clone());
         self.active = self.workspaces.len() - 1;
-        self.tab_bar.update(cx, |bar, cx| {
-            bar.add_tab(format!("untitled {}", self.next_id), cx);
-        });
+        self.tab_bar.update(cx, |bar, cx| bar.add_tab(title, cx));
 
         cx.emit(MultiWorkspaceEvent::WorkspaceAdded(workspace));
         cx.notify();
@@ -124,7 +158,11 @@ impl Render for MultiWorkspace {
         let title_bar = self.title_bar.clone();
 
         let content = match self.workspaces.get(self.active) {
-            Some(workspace) => div().flex_1().min_h(px(0.)).overflow_hidden().child(workspace.clone()),
+            Some(workspace) => div()
+                .flex_1()
+                .min_h(px(0.))
+                .overflow_hidden()
+                .child(workspace.clone()),
             None => div()
                 .flex_1()
                 .min_h(px(0.))

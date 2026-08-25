@@ -32,7 +32,6 @@ use std::{io, process};
 use util::ResultExt;
 use release_channel::{AppCommitSha, AppVersion};
 use workspace::multi_workspace::MultiWorkspace;
-use workspace::workspace::Workspace;
 use crate::init::crash::CrashHandler;
 use crate::init::environment::{check_for_conpty_dll, stdout_is_a_pty};
 use crate::init::ui::dump_all_gpui_actions;
@@ -325,8 +324,8 @@ fn main() {
             }
         }
 
+        gpui_router::init(cx);
 
-        let paths = args.paths.clone();
         let bounds = Bounds::centered(None, size(px(800.0), px(720.0)), cx);
         cx.open_window(
             WindowOptions {
@@ -337,11 +336,9 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            move |window, cx| {
-                cx.new(move |cx| {
-                    let workspace = Workspace::new(window,cx);
-                    workspace
-                })
+            move |_window, cx| {
+                let paths = args.paths.clone();
+                cx.new(|cx| MultiWorkspace::new(paths, cx))
             },
         )
         .expect("failed to open window");

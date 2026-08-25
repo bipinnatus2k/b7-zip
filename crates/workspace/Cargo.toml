@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 bit7z-explorer.workspace = true
 bit7z-rs.workspace = true
+explorer-view.workspace = true
 gpui.workspace = true
 guise-ui.workspace = true
 password.workspace = true
