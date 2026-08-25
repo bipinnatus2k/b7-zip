@@ -1,10 +1,6 @@
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::rc::Rc;
-use gpui::{div, AnyView, AnyWeakView, App, Context, Div, Entity, EntityId, EventEmitter, IntoElement, Render, Subscription, WeakEntity, Window, AppContext};
+use gpui::{div, AnyView, AnyWeakView, Context, Div, Entity, EventEmitter, IntoElement, Render, Subscription, WeakEntity, Window, Styled, ParentElement};
+use gpui::prelude::FluentBuilder;
 use guise::panegroup::Pane;
-use crate::key::ProjectGroupKey;
-use crate::multi_workspace::MultiWorkspace;
 
 #[derive(
     Clone,
@@ -55,36 +51,27 @@ pub enum OpenMode {
 }
 
 pub struct Workspace {
-    weak_self: WeakEntity<Self>,
     workspace_actions: Vec<Box<dyn Fn(Div, &Workspace, &mut Window, &mut Context<Self>) -> Div>>,
     zoomed: Option<AnyWeakView>,
     _subscriptions: Vec<Subscription>,
-    multi_workspace: Option<WeakEntity<MultiWorkspace>>,
-    /// Shared with the parent `MultiWorkspace` and any sibling workspaces: holds
-    /// the id of the single workspace currently presented in this OS window.
-    /// `MultiWorkspace` is the only writer; workspaces only read it to decide
-    /// whether they may write the shared window's title and edited indicator. We
-    /// use this instead of going through the `multi_workspace` field to avoid
-    /// reading it as we might end up in a double lease otherwise.
-    active_workspace_id: Option<Rc<Cell<EntityId>>>,
-
+    workspace_id: Option<WorkspaceId>
 }
 
 impl Workspace {
 
     pub fn new(
-        // workspace_id: Option<WorkspaceId>,
-        window: &mut Window,
+        workspace_id: Option<WorkspaceId>,
+        // window: &mut Window,
         cx: &mut Context<Self>
     ) -> Self {
         let weak_handle = cx.entity().downgrade();
 
         cx.emit(Event::WorkspaceCreated(weak_handle.clone()));
 
-        let multi_workspace = window
-            .root::<MultiWorkspace>()
-            .flatten()
-            .map(|mw| mw.downgrade());
+        // let multi_workspace = window
+        //     .root::<MultiWorkspace>()
+        //     .flatten()
+        //     .map(|mw| mw.downgrade());
 
         let subscriptions = vec![
             // cx.observe_window_activation(window, Self::on_window_activation_changed),
@@ -127,7 +114,8 @@ impl Workspace {
 
 
         Self {
-            weak_self: weak_handle.clone(),
+            // weak_self: weak_handle.clone(),
+            workspace_id,
             zoomed: None,
             // zoomed_position: None,
             // maximized_pane: None,
@@ -186,38 +174,27 @@ impl Workspace {
             // last_open_dock_positions: Vec::new(),
             // removing: false,
             // sidebar_focus_handle: None,
-            multi_workspace,
-            active_workspace_id: None,
+            // multi_workspace,
+            // active_workspace_id: None,
             // active_worktree_creation: ActiveWorktreeCreation::default(),
             // open_in_dev_container: false,
             // _dev_container_task: None,
             // deferred_save_items: Vec::new(),
         }
     }
-
-    // pub fn project_group_key(&self, cx: &App) -> ProjectGroupKey {
-    //     self.project.read(cx).project_group_key(cx)
-    // }
-
-    pub fn multi_workspace(&self) -> Option<&WeakEntity<MultiWorkspace>> {
-        self.multi_workspace.as_ref()
-    }
-
-    pub fn set_multi_workspace(
-        &mut self,
-        multi_workspace: WeakEntity<MultiWorkspace>,
-        active_workspace_id: Rc<Cell<EntityId>>,
-        cx: &mut App,
-    ) {
-
-        self.multi_workspace = Some(multi_workspace);
-        self.active_workspace_id = Some(active_workspace_id);
-    }
+    
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when_some(self.workspace_id, |x, t| {
+                x.child(format!("Workspace {}", t.0))
+            })
     }
 }
 
