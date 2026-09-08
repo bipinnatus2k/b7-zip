@@ -27,7 +27,7 @@ futures = "0.3.33"
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-router.workspace = true
-guise-ui.workspace = true
+#guise-ui.workspace = true
 log.workspace = true
 mimalloc = { version = "0.1.52" }
 parking_lot.workspace = true

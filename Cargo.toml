@@ -32,7 +32,7 @@ members = [
     "crates/task",
     "crates/temp",
     "crates/thirdparties/gpui-tray",
-    "crates/thirdparties/guise/crates/guise",
+#    "crates/thirdparties/guise/crates/guise",
     "crates/thirdparties/gpui-router/crates/router",
     "crates/thirdparties/gpui-router/crates/router-macros",
     "crates/tray",
@@ -98,7 +98,7 @@ gpui = { git = "https://github.com/zed-industries/zed" }
 gpui-tray = { path = "crates/thirdparties/gpui-tray" }
 gpui_macros = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
-guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
+#guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
 ui = { path = "crates/ui" }
 human_bytes = "0.4.3"
 ignore = "0.4.22"

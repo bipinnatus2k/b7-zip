@@ -18,7 +18,7 @@ gpui_platform.workspace = true
 password.workspace = true
 task.workspace = true
 temp.workspace = true
-guise-ui.workspace = true
+#guise-ui.workspace = true
 
 [lints]
 workspace = true
