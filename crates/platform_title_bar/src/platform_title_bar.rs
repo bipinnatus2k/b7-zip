@@ -20,6 +20,11 @@ actions!(
 /// Default title bar height when none is supplied.
 pub const DEFAULT_TITLE_BAR_HEIGHT: f32 = 34.;
 
+/// Rebuilds a title bar child on every render. Elements are single-use in
+/// gpui, so persistent content must be produced by a factory instead of
+/// being stored as an element.
+pub type TitleBarContent = Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>;
+
 pub struct TitleBarStyle {
     /// Background color of the title bar. Supplied by the caller since
     /// this crate does not depend on a theme system.
@@ -43,6 +48,8 @@ impl Default for TitleBarStyle {
 pub struct PlatformTitleBar {
     id: ElementId,
     children: SmallVec<[AnyElement; 2]>,
+    /// Persistent content, rebuilt on every render (see [`TitleBarContent`]).
+    content: Option<TitleBarContent>,
     style: TitleBarStyle,
     platform_style: PlatformStyle,
     should_move: bool,
@@ -63,6 +70,7 @@ impl PlatformTitleBar {
         Self {
             id: id.into(),
             children: SmallVec::new(),
+            content: None,
             style: TitleBarStyle::default(),
             platform_style: PlatformStyle::platform(),
             should_move: false,
@@ -73,19 +81,19 @@ impl PlatformTitleBar {
         }
     }
 
-    // pub fn background(mut self, background: Hsla) -> Self {
-    //     self.style.background = background;
-    //     self
-    // }
+    pub fn background(mut self, background: Hsla) -> Self {
+        self.style.background = background;
+        self
+    }
 
     pub fn set_background(&mut self, background: Hsla) {
         self.style.background = background;
     }
 
-    // pub fn height(mut self, height: Pixels) -> Self {
-    //     self.style.height = height;
-    //     self
-    // }
+    pub fn height(mut self, height: Pixels) -> Self {
+        self.style.height = height;
+        self
+    }
 
     pub fn set_height(&mut self, height: Pixels) {
         self.style.height = height;
@@ -111,6 +119,26 @@ impl PlatformTitleBar {
         self.children = children.into_iter().collect();
     }
 
+    /// Registers persistent content that is rebuilt on every render.
+    ///
+    /// Unlike [`Self::set_children`] (consumed by the first render, the
+    /// upstream contract is for the owner to re-supply them each frame),
+    /// this survives any number of re-renders.
+    pub fn content(
+        mut self,
+        content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    ) -> Self {
+        self.content = Some(Box::new(content));
+        self
+    }
+
+    pub fn set_content(
+        &mut self,
+        content: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+    ) {
+        self.content = Some(Box::new(content));
+    }
+
     fn effective_button_layout(
         &self,
         decorations: &Decorations,
@@ -125,7 +153,7 @@ impl PlatformTitleBar {
         }
     }
 
-    pub fn title_bar_color(&self, window: &mut Window) -> Hsla {
+    fn title_bar_color(&self, window: &mut Window) -> Hsla {
         if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             if window.is_window_active() && !self.should_move {
                 self.style.background

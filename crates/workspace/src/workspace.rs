@@ -1,11 +1,13 @@
-use bit7z_rs::{ArchiveEngine};
-use explorer_view::ArchiveExplorer;
-use gpui::{div, px, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled, Window};
+use bit7z_rs::ArchiveEngine;
+use explorer_view::{ArchiveExplorer, ExplorerCommand, ExplorerEvent};
+use gpui::{div, px, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled, Window};
 use guise::theme::Size;
 use guise::Text;
 use session::ArchiveSession;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use crate::welcome::Welcome;
 
 #[derive(
     Clone,
@@ -76,6 +78,12 @@ impl Workspace {
         match ArchiveSession::open(session::next_archive_id(), engine.clone(), archive_path, None) {
             Ok(archive_session) => {
                 let explorer = ArchiveExplorer::new(Arc::new(Mutex::new(archive_session)), cx);
+                cx.subscribe(&explorer, |_this, explorer, event: &ExplorerEvent, cx| {
+                    if let ExplorerEvent::Command(ExplorerCommand::NavigateUp) = event {
+                        explorer.update(cx, |explorer, cx| explorer.navigate_up(cx));
+                    }
+                })
+                .detach();
                 Self {
                     workspace_id,
                     title: title.into(),
@@ -141,7 +149,9 @@ impl Render for Workspace {
             .flex_col()
             .overflow_hidden()
             .child(match &self.state {
-                WorkspaceState::Welcome => welcome_page(),
+                WorkspaceState::Welcome => div()
+                    .size_full()
+                    .child(Welcome),
                 WorkspaceState::Open { path, explorer } => div()
                     .size_full()
                     .flex()
@@ -172,21 +182,3 @@ impl Render for Workspace {
     }
 }
 
-fn welcome_page() -> gpui::Div {
-    div()
-        .size_full()
-        .flex()
-        .flex_col()
-        .items_center()
-        .justify_center()
-        .gap(px(10.))
-        .child(Text::new("Bit7zFM").size(Size::Xl).bold())
-        .child(Text::new("A 7-Zip / WinRAR class archive manager").dimmed())
-        .child(
-            Text::new(
-                "Open an archive from the command line, or press + for a new tab.",
-            )
-            .size(Size::Sm)
-            .dimmed(),
-        )
-}

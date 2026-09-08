@@ -5,6 +5,7 @@
 // //! dialog driven by real engine callbacks.
 mod task;
 pub mod multi_workspace;
+pub mod welcome;
 pub mod workspace;
 pub mod constants;
 pub mod key;

@@ -33,6 +33,8 @@ members = [
     "crates/temp",
     "crates/thirdparties/gpui-tray",
     "crates/thirdparties/guise/crates/guise",
+    "crates/thirdparties/gpui-router/crates/router",
+    "crates/thirdparties/gpui-router/crates/router-macros",
     "crates/tray",
     "crates/vfs",
     "crates/workspace",
@@ -43,7 +45,7 @@ members = [
     "executor", "crates/ui", "crates/multi-workspace-demo",
 ]
 
-exclude = ["crates/thirdparties/guise"]
+exclude = ["crates/thirdparties/guise","crates/thirdparties/gpui-router"]
 default-members = ["app"]
 
 [workspace.package]
@@ -85,7 +87,13 @@ fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }
 futures = "0.3"
 multi-workspace-core = { path = "crates/multi-workspace-core" }
-smallvec = {version = "*"}
+smallvec = "1"
+quote = "1"
+syn = "2"
+hashbrown = "0"
+proc-macro2 = "1.0"
+gpui-router = { path = "crates/thirdparties/gpui-router/crates/router" }
+gpui-router-macros = { path = "crates/thirdparties/gpui-router/crates/router-macros" }
 gpui = { git = "https://github.com/zed-industries/zed" }
 gpui-tray = { path = "crates/thirdparties/gpui-tray" }
 gpui_macros = { git = "https://github.com/zed-industries/zed" }

@@ -1,6 +1,6 @@
 use bit7z_rs::{ArchiveEngine, Bit7zEngine};
-use gpui::{div, px, AppContext, Context, Entity, EntityId, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window};
-use guise::{AppShell, TabBar, TabBarEvent, Text};
+use gpui::{actions, div, px, App, AppContext, Context, Entity, EntityId, EventEmitter, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, SharedString, Styled, WeakEntity, Window};
+use guise::{AppShell, Icon, IconName, StatusBar, TabBar, TabBarEvent, Text};
 use platform_title_bar::{DEFAULT_TITLE_BAR_HEIGHT, PlatformTitleBar};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,6 +8,27 @@ use std::sync::Arc;
 use crate::workspace::{Workspace, WorkspaceId};
 
 const ENGINE_UNAVAILABLE: &str = "the 7-Zip engine could not be loaded";
+
+const ARCHIVE_EXTENSIONS: [&str; 15] = [
+    "7z", "zip", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "wim", "rar", "cab", "iso",
+    "lzma", "zst",
+];
+
+actions!(
+    multi_workspace,
+    [
+        /// Pick an archive with the native file dialog and open it in a new tab.
+        OpenArchive,
+        /// Append a fresh welcome tab.
+        NewTab,
+        /// Close the tab that is currently displayed.
+        CloseActiveTab,
+        /// Switch to the following tab (wraps around).
+        ActivateNextTab,
+        /// Switch to the preceding tab (wraps around).
+        ActivatePrevTab,
+    ]
+);
 
 pub enum MultiWorkspaceEvent {
     ActiveWorkspaceChanged {
@@ -35,10 +56,79 @@ pub struct MultiWorkspace {
 impl EventEmitter<MultiWorkspaceEvent> for MultiWorkspace {}
 
 impl MultiWorkspace {
+    /// Registers the key bindings for this component. Call once at startup,
+    /// before any window is opened.
+    pub fn init(cx: &mut App) {
+        cx.bind_keys([
+            KeyBinding::new("ctrl-o", OpenArchive, None),
+            KeyBinding::new("ctrl-t", NewTab, None),
+            KeyBinding::new("ctrl-w", CloseActiveTab, None),
+            KeyBinding::new("ctrl-tab", ActivateNextTab, None),
+            KeyBinding::new("ctrl-shift-tab", ActivatePrevTab, None),
+        ]);
+    }
+
+    fn open_archive(
+        &mut self,
+        _action: &OpenArchive,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let extensions = ARCHIVE_EXTENSIONS;
+            let picked = cx
+                .background_executor()
+                .spawn(async move {
+                    rfd::FileDialog::new()
+                        .add_filter("Archives", &extensions)
+                        .add_filter("All files", &["*"])
+                        .pick_file()
+                })
+                .await;
+            if let Some(path) = picked {
+                this.update(cx, |this, cx| this.open_path(&path, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    fn new_tab(&mut self, _action: &NewTab, _window: &mut Window, cx: &mut Context<Self>) {
+        self.add_workspace(cx);
+    }
+
+    fn close_active_tab(
+        &mut self,
+        _action: &CloseActiveTab,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workspaces.is_empty() {
+            let index = self.active;
+            self.close_workspace(index, cx);
+        }
+    }
+
+    fn next_tab(&mut self, _: &ActivateNextTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspaces.len() > 1 {
+            let next = (self.active + 1) % self.workspaces.len();
+            self.activate(next, cx);
+        }
+    }
+
+    fn previous_tab(&mut self, _: &ActivatePrevTab, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspaces.len() > 1 {
+            let previous = (self.active + self.workspaces.len() - 1) % self.workspaces.len();
+            self.activate(previous, cx);
+        }
+    }
     /// Creates the window content. One tab per path in `paths`; a single
     /// welcome tab when no paths were passed.
     pub fn new(paths: Vec<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let title_bar = cx.new(|_| PlatformTitleBar::new("app-title-bar"));
+        let title_bar = cx.new(|_| {
+            PlatformTitleBar::new("app-title-bar").content(|_, _| {
+                div().px(px(8.)).child(Text::new("Bit7zFM")).into_any_element()
+            })
+        });
 
         let tab_bar = cx.new(|cx| TabBar::new(cx));
         cx.subscribe(&tab_bar, |this, _bar, event: &TabBarEvent, cx| match event {
@@ -154,7 +244,7 @@ impl MultiWorkspace {
 }
 
 impl Render for MultiWorkspace {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title_bar = self.title_bar.clone();
 
         let content = match self.workspaces.get(self.active) {
@@ -172,18 +262,29 @@ impl Render for MultiWorkspace {
                 .child(Text::new("No open workspaces").dimmed()),
         };
 
-        div().size_full().child(
-            AppShell::new()
-                .header(DEFAULT_TITLE_BAR_HEIGHT, move |_, _| title_bar.clone())
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.))
-                        .child(self.tab_bar.clone())
-                        .child(content),
-                ),
-        )
+        div()
+            .size_full()
+            .on_action(cx.listener(Self::open_archive))
+            .on_action(cx.listener(Self::new_tab))
+            .on_action(cx.listener(Self::close_active_tab))
+            .on_action(cx.listener(Self::next_tab))
+            .on_action(cx.listener(Self::previous_tab))
+            .child(
+                AppShell::new()
+                    .header(DEFAULT_TITLE_BAR_HEIGHT, move |_, _| title_bar.clone())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.))
+                            .child(self.tab_bar.clone())
+                            .child(content),
+                    )
+                    .footer(50.0,|window, cx| {
+                        StatusBar::new()
+                            .left(Icon::new(IconName::AArrowDown))
+                    }),
+            )
     }
 }

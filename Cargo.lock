@@ -244,6 +244,7 @@ dependencies = [
  "etw_tracing_ui",
  "futures",
  "gpui",
+ "gpui-router",
  "gpui_platform",
  "guise-ui",
  "log",
@@ -3060,6 +3061,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpui-router"
+version = "0.3.0"
+dependencies = [
+ "gpui",
+ "gpui-router-macros",
+ "gpui_platform",
+ "hashbrown 0.16.1",
+ "matchit",
+ "smallvec",
+]
+
+[[package]]
+name = "gpui-router-macros"
+version = "0.3.0"
+dependencies = [
+ "gpui",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "gpui-tray"
 version = "0.1.0"
 dependencies = [
@@ -4415,6 +4438,12 @@ checksum = "d1525a2a28c7f4fa0fc98bb91ae755d1e2d1505079e05539e35bc876b5d65ae9"
 dependencies = [
  "regex-automata",
 ]
+
+[[package]]
+name = "matchit"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f926ade0c4e170215ae43342bf13b9310a437609c81f29f86c5df6657582ef9"
 
 [[package]]
 name = "maybe-rayon"
@@ -9400,6 +9429,7 @@ dependencies = [
  "app_action",
  "bit7z-explorer",
  "bit7z-rs",
+ "explorer-view",
  "futures",
  "gpui",
  "guise-ui",
@@ -9411,6 +9441,7 @@ dependencies = [
  "session",
  "task",
  "temp",
+ "ui",
  "util",
  "vfs",
  "windows 0.61.3",

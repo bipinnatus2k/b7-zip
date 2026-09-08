@@ -301,6 +301,8 @@ fn main() {
     app.run(move |cx| {
         Theme::dark().init(cx);
 
+        MultiWorkspace::init(cx);
+
         load_embedded_fonts(cx);
 
         #[cfg(target_os = "windows")]

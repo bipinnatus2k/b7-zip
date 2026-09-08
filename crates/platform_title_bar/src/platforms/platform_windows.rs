@@ -1,4 +1,4 @@
-use gpui::{prelude::*, Hsla, Pixels, Rgba, WindowControlArea, Window, App, div, px};
+use gpui::{prelude::*, Hsla, Pixels, Rgba, WindowControlArea, Window, App, div, px, relative};
 
 use ui::prelude::*;
 
@@ -131,6 +131,7 @@ impl RenderOnce for WindowsCaptionButton {
 
         div().flex().flex_row()
             .id(self.id())
+            .items_center()
             .justify_center()
             .content_center()
             .occlude()

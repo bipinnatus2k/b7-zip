@@ -17,6 +17,10 @@ gpui_platform.workspace = true
 gpui_macros.workspace = true
 #gpui_util.workspace = true
 guise-ui.workspace = true
+#web_time.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true,features = ["test-support"] }
 
 [lints]
 workspace = true
