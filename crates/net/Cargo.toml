@@ -17,7 +17,7 @@ smol.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 anyhow.workspace = true
-async-io = "2.4"
+async-io = "2.6"
 windows.workspace = true
 
 [dev-dependencies]
