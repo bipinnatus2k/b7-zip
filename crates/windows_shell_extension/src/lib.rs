@@ -8,8 +8,8 @@
 //! launching the executor process. The DLL never touches the archive itself.
 //!
 //! Registration (self-register / unregister, HKCU only, no admin needed):
-//! - `regsvr32 shell.dll`  -> `DllRegisterServer`
-//! - `regsvr32 /u shell.dll` -> `DllUnregisterServer`
+//! - `regsvr32 windows_shell_extension.dll`  -> `DllRegisterServer`
+//! - `regsvr32 /u windows_shell_extension.dll` -> `DllUnregisterServer`
 //! - `bit7z shell-install` / `bit7z shell-uninstall` (same entry points)
 //!
 //! Menu layout is controlled by `HKCU\Software\Bit7zFM\Shell`:
@@ -19,6 +19,7 @@
 #![allow(non_snake_case)]
 #![allow(non_camel_case_types)]
 
+use std::boxed::Box;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -860,7 +861,7 @@ fn launch_hash(files: &[String], algorithm: checksum::ChecksumAlgorithm) -> Resu
 fn launch_job(spec: task::JobSpec) -> Result<(), String> {
     let Some(executor) = find_sibling_exe("bit7z-executor.exe") else {
         return Err(format!(
-            "bit7z-executor.exe not found next to shell DLL (dll at {:?})",
+            "bit7z-executor.exe not found next to windows_shell_extension DLL (dll at {:?})",
             module_path().ok()
         ));
     };
@@ -868,7 +869,7 @@ fn launch_job(spec: task::JobSpec) -> Result<(), String> {
         return Err("cannot create jobs dir".into());
     };
     let job_id = format!(
-        "shell-{}-{}-{}",
+        "windows_shell_extension-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

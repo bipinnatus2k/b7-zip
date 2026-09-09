@@ -1,5 +1,5 @@
 [package]
-name = "shell"
+name = "windows-shell-extension"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,6 @@ path = "src/lib.rs"
 checksum.workspace = true
 task.workspace = true
 temp.workspace = true
-windows-core = "0.61"
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

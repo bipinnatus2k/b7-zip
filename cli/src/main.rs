@@ -236,8 +236,8 @@ fn shell_control(install: bool) -> Result<(), String> {
     use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
     use windows::core::{PCSTR, PCWSTR};
 
-    // Locate shell.dll: next to the executable, then in target/debug.
-    let dll = find_shell_dll().ok_or("shell.dll not found (build the shell crate first)")?;
+    // Locate windows_shell_extension.dll: next to the executable, then in target/debug.
+    let dll = find_shell_dll().ok_or("windows_shell_extension.dll not found (build the windows_shell_extension crate first)")?;
     let wide: Vec<u16> = dll.encode_utf16().chain(std::iter::once(0)).collect();
     let module = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) }
         .map_err(|e| format!("LoadLibraryW({dll:?}): {e}"))?;
@@ -272,9 +272,9 @@ fn shell_control(install: bool) -> Result<(), String> {
 fn find_shell_dll() -> Option<String> {
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let candidates = [
-        exe_dir.join("shell.dll"),
-        PathBuf::from("target/debug/shell.dll"),
-        PathBuf::from("target/release/shell.dll"),
+        exe_dir.join("windows_shell_extension.dll"),
+        PathBuf::from("target/debug/windows_shell_extension.dll"),
+        PathBuf::from("target/release/windows_shell_extension.dll"),
     ];
     candidates
         .into_iter()

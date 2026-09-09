@@ -27,7 +27,7 @@ members = [
     "crates/paths",
     "crates/release_channel",
     "crates/session",
-    "crates/shell",
+    "crates/windows_shell_extension", "crates/signals",
     "crates/system_specs",
     "crates/task",
     "crates/temp",

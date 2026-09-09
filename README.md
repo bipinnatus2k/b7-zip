@@ -26,7 +26,7 @@ so each component can be developed, tested, and reused independently.
 | `app`           | `bit7zfm` – the 7zFM-style file manager (toolbar, breadcrumb address bar, file table, dialogs, live progress) |
 | `executor`      | `bit7z-executor` – standalone GUI task runner driven by job files (live byte progress + cancel) |
 | `cli`           | `bit7z` – full command-line surface (list/extract/compress/test/…, `shell-install`/`shell-uninstall`) |
-| `crates/shell`  | Explorer context-menu COM DLL (IShellExtInit + IContextMenu) |
+| `crates/windows_shell_extension`  | Explorer context-menu COM DLL (IShellExtInit + IContextMenu) |
 | `crates/resources` | Windows resources: app icon, DPI manifest, version info |
 
 ## Architecture
@@ -86,7 +86,7 @@ dialog). See `crates/task/src/job.rs`.
 
 ### Shell extension
 
-`crates/shell` builds `shell.dll`, a COM in-process server loaded by
+`crates/windows_shell_extension` builds `shell.dll`, a COM in-process server loaded by
 Explorer.exe. It adds 7-Zip / WinRAR-style context-menu verbs:
 
 - On archives: Open, Extract files…, Extract Here, Extract to `"name\"`,
