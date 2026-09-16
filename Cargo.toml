@@ -6,7 +6,6 @@ members = [
     "cli",
     "crates/app_action",
     "crates/app_constants",
-    "crates/platform_title_bar",
     "crates/archive_vfs",
     "crates/assets",
     "crates/bit7z",
@@ -15,37 +14,41 @@ members = [
     "crates/etw_tracing",
     "crates/etw_tracing_ui",
     "crates/explorer",
-    "crates/multi-workspace-core",
-    "crates/explorer_model",
-    "crates/explorer_view",
+    #    "crates/explorer_model",
+    #    "crates/explorer_view",
     "crates/ffi",
     "crates/format_detector",
     "crates/fs",
     "crates/fs_watcher",
+    "crates/multi-workspace-core",
+    "crates/multi-workspace-demo",
     "crates/net",
     "crates/password",
     "crates/paths",
+    "crates/platform_title_bar",
     "crates/release_channel",
     "crates/session",
-    "crates/windows_shell_extension", "crates/signals",
+    "crates/signals",
     "crates/system_specs",
     "crates/task",
     "crates/temp",
-    "crates/thirdparties/gpui-tray",
-#    "crates/thirdparties/guise/crates/guise",
+    #    "crates/thirdparties/guise/crates/guise",
     "crates/thirdparties/gpui-router/crates/router",
     "crates/thirdparties/gpui-router/crates/router-macros",
+    "crates/thirdparties/gpui-tray",
     "crates/tray",
+    "crates/ui",
     "crates/vfs",
+    "crates/windows_shell_extension",
     "crates/workspace",
-    "crates/zlog",
+    #    "crates/zlog",
     #    "crates/zlog_settings",
-    "crates/ztracing",
-    "crates/ztracing_macro",
-    "executor", "crates/ui", "crates/multi-workspace-demo",
+    #    "crates/ztracing",
+    #    "crates/ztracing_macro",
+    "executor",
 ]
 
-exclude = ["crates/thirdparties/guise","crates/thirdparties/gpui-router"]
+exclude = ["crates/thirdparties/gpui-router", "crates/thirdparties/guise"]
 default-members = ["app"]
 
 [workspace.package]
@@ -66,76 +69,110 @@ app_action = { path = "crates/app_action" }
 app_constants = { path = "crates/app_constants" }
 archive_vfs = { path = "crates/archive_vfs" }
 assets = { path = "crates/assets" }
+async-fs = "2.2"
 async-process = "2.5.0"
 async-trait = "0.1"
+async_zip = { version = "0.0.18", features = ["deflate", "deflate64"] }
 bit7z-explorer = { path = "crates/explorer" }
 bit7z-ffi = { path = "crates/ffi" }
 bit7z-rs = { path = "crates/bit7z" }
 checksum = { path = "crates/checksum" }
-chrono = { version = "*" }
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-collections = { git = "https://github.com/zed-industries/zed" }
+collections = { package = "gpui-pre-collections", version = "0.3.4" }
 const_format = "0.2"
 crash-handler = "0.7"
 crashes = { path = "crates/crashes" }
 dirs = "6.0"
+dunce = "1.0"
 etw_tracing = { path = "crates/etw_tracing" }
 etw_tracing_ui = { path = "crates/etw_tracing_ui" }
-explorer-model = { path = "crates/explorer_model" }
-explorer-view = { path = "crates/explorer_view" }
+explorer = { package = "bit7z-explorer", path = "crates/explorer" }
 fs = { path = "crates/fs" }
 fs_watcher = { path = "crates/fs_watcher" }
 futures = "0.3"
-multi-workspace-core = { path = "crates/multi-workspace-core" }
-smallvec = "1"
-quote = "1"
-syn = "2"
-hashbrown = "0"
-proc-macro2 = "1.0"
+futures-lite = "1.13"
+globset = "0.4"
+gpui = { package = "gpui-pre", version = "0.3.4", default-features = false }
+gpui-kit = { version = "0.6", features = ["assets", "component"] }
 gpui-router = { path = "crates/thirdparties/gpui-router/crates/router" }
 gpui-router-macros = { path = "crates/thirdparties/gpui-router/crates/router-macros" }
-gpui = { git = "https://github.com/zed-industries/zed" }
 gpui-tray = { path = "crates/thirdparties/gpui-tray" }
-gpui_macros = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
-#guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
-ui = { path = "crates/ui" }
+gpui_macros = { package = "gpui-pre-macros", version = "0.3.4" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.4" }
+gpui_util = { package = "gpui-pre-util", version = "0.3.4" }
+hashbrown = "0"
 human_bytes = "0.4.3"
-ignore = "0.4.22"
-platform_title_bar = { path = "crates/platform_title_bar" }
+ignore = "0.4.33"
+itertools = "0.14.0"
 jiff = { version = "0.2", features = ["serde"] }
 libc = "0.2"
-log = "0.4.33"
+log = "0.4.34"
 mach2 = "0.5"
 minidumper = "0.9"
+multi-workspace-core = { path = "crates/multi-workspace-core" }
 net = { path = "crates/net" }
+nix = "0.29"
 parking_lot = "0.12.5"
 password = { path = "crates/password" }
+path = { path = "crates/thirdparties/zed/path" }
 paths = { path = "crates/paths" }
 pciid-parser = "0.8.1"
+percent-encoding = "2.3.2"
+perf = { path = "crates/thirdparties/zed/tooling/perf" }
+platform_title_bar = { path = "crates/platform_title_bar" }
+pretty_assertions = { version = "1.4.1", features = ["unstable"] }
+proc-macro2 = "1.0"
+quote = "1"
+rand = "0.9"
+reactive-signals = { path = "crates/signals" }
+regex = "1.13"
 release_channel = { path = "crates/release_channel" }
 rfd = { version = "0.15", default-features = false }
-rust-embed = { version = "8.11", features = ["include-exclude"] }
-schemars = { version = "1.0", features = ["indexmap2"] }
+rust-embed = { version = "8.12", features = ["include-exclude"] }
+rustix = { version = "1.1", features = ["fs"] }
+schemars = { version = "1.2", features = ["indexmap2"] }
 semver = "1.0.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1"
+serde_json_lenient = { version = "0.2", features = [
+    "preserve_order",
+    "raw_value",
+] }
 session = { path = "crates/session" }
+shlex = "1.3.0"
+smallvec = "1"
 smol = "2.0.2"
+syn = "2"
 sysinfo = "0.39.6"
 system_specs = { path = "crates/system_specs" }
+take-until = "0.2.0"
 task = { path = "crates/task" }
 temp = { path = "crates/temp" }
 tempfile = "3"
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 tracing = "0.1"
-util = { git = "https://github.com/zed-industries/zed" }
+#guise-ui = { path = "crates/thirdparties/guise/crates/guise", default-features = false }
+ui = { path = "crates/ui" }
+unicase = "2.9"
+unicode-bidi = { version = "0.3.18", default-features = false, features = [
+    "hardcoded-data",
+] }
+unicode-script = "0.5.8"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+unindent = "0.2.4"
+url = "2.5"
+util = { path = "crates/thirdparties/zed/util" }
+util_macros = { path = "crates/thirdparties/zed/util_macros" }
 vfs = { path = "crates/vfs" }
+walkdir = "2.5"
+which = "6.0.3"
 workspace = { path = "crates/workspace" }
-zlog = { path = "crates/zlog" }
+zlog = { package = "gpui-pre-zlog", version = "0.3.4" }
 zstd = "0.11"
-ztracing = { path = "crates/ztracing" }
-ztracing_macro = { path = "crates/ztracing_macro" }
+ztracing = { package = "gpui-pre-ztracing", version = "0.3.4" }
+ztracing_macro = { package = "gpui-pre-ztracing-macro", version = "0.3.4" }
 
 [workspace.dependencies.windows]
 version = "0.61"
@@ -218,10 +255,21 @@ type_complexity = "allow"
 # https://github.com/longbridge/gpui-component/pull/2149
 useless_conversion = "allow"
 
+[workspace.metadata.cargo-machete]
+ignored = [
+    "bindgen",
+    "cbindgen",
+    "prost_build",
+    "serde",
+    "component",
+    "documented",
+    "sea-orm-macros",
+]
+
 [patch."https://github.com/zed-industries/scap"]
 zed-scap = { path = "crates/thirdparties/scap" }
 
-[patch.crates-io]
-gpui = { git = "https://github.com/zed-industries/zed", features = ["x11", "wayland", "font-kit"] }
-quick-xml = { git = "https://github.com/tafia/quick-xml", tag = "v0.41.0", version = "0.41.0" }
+#[patch.crates-io]
+#gpui = { package = "gpui-pre", version = "0.3.4" }
+#quick-xml = { git = "https://github.com/tafia/quick-xml", tag = "v0.41.0", version = "0.41.0" }
 
