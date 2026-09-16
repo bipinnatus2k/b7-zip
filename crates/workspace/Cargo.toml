@@ -6,26 +6,17 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-bit7z-explorer.workspace = true
+anyhow.workspace = true
 bit7z-rs.workspace = true
-explorer-view.workspace = true
+explorer.workspace = true
 gpui.workspace = true
-#guise-ui.workspace = true
-password.workspace = true
 rfd.workspace = true
 session.workspace = true
-task.workspace = true
-temp.workspace = true
 ui.workspace = true
-vfs.workspace = true
-windows.workspace = true
-app_action.workspace = true
-multi-workspace-core.workspace = true
-platform_title_bar.workspace = true
-util.workspace = true
-anyhow.workspace = true
-futures.workspace = true
+#platform_title_bar.workspace = true
 serde.workspace = true
+gpui-kit.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

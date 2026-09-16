@@ -3,12 +3,10 @@
 // //! Toolbar + breadcrumb address bar + file table + status bar, with modal
 // //! dialogs for add/extract/test/delete/rename/password/info and a progress
 // //! dialog driven by real engine callbacks.
-mod task;
 pub mod multi_workspace;
-pub mod welcome;
-pub mod workspace;
 pub mod constants;
-pub mod key;
+pub(crate) mod tab_bar;
+pub mod panels;
 //
 // use self::task::{PendingOp, RunningTask, TaskKind, task_meta};
 // use ::task::{JobSpec, OverwriteSpec};
