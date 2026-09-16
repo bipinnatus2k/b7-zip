@@ -13,14 +13,16 @@ repository.workspace = true
 
 [dependencies]
 gpui.workspace = true
-gpui_platform.workspace = true
 gpui_macros.workspace = true
+reactive-signals.workspace = true
+gpui-kit = { workspace = true }
 #gpui_util.workspace = true
 #guise-ui.workspace = true
 #web_time.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true,features = ["test-support"] }
+
 
 [lints]
 workspace = true

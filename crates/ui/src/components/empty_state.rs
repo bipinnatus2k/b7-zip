@@ -1,11 +1,11 @@
-use gpui::{AnyElement, App, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window};
+use gpui::{div, AnyElement, App, Element, FontWeight, IntoElement, ParentElement, RenderOnce, SharedString, Styled, Window};
+use gpui::prelude::FluentBuilder;
 use crate::components::stack::v_flex;
-use crate::prelude::*;
 
 /// A centered placeholder shown when a list/table/collection has no content.
 #[derive(IntoElement)]
 pub struct EmptyState {
-    icon: IconName,
+    icon: Option<AnyElement>,
     heading: SharedString,
     description: Option<SharedString>,
     action: Option<AnyElement>,
@@ -14,15 +14,15 @@ pub struct EmptyState {
 impl EmptyState {
     pub fn new(heading: impl Into<SharedString>) -> Self {
         Self {
-            icon: IconName::User,
+            icon: None,
             heading: heading.into(),
             description: None,
             action: None,
         }
     }
 
-    pub fn icon(mut self, icon: IconName) -> Self {
-        self.icon = icon;
+    pub fn icon(mut self, icon: AnyElement) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -45,15 +45,13 @@ impl RenderOnce for EmptyState {
             .justify_center()
             .gap_2()
             .py_12()
-            .child(
-                Icon::new(self.icon)
-                    .size(Size::Xl)
-                    // .color(Color::Custom(semantic::text_muted(cx))),
-            )
-            .child(Text::new(self.heading).weight(FontWeight::MEDIUM))
+            .when_some(self.icon, |x, t| {
+                x.child(t)
+            })
+            .child(div().child(self.heading).font_weight(FontWeight::MEDIUM))
             .children(
                 self.description
-                    .map(|d| Text::new(d).size(Size::Sm).dimmed()),
+                    .map(|d| div().text_sm().child(d)),
             )
             .children(self.action)
     }

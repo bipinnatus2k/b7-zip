@@ -5,6 +5,5 @@ pub mod traits;
 pub mod components;
 pub mod foundation;
 pub mod layout;
+pub mod data;
 // pub mod layout;
-
-pub use guise::*;
