@@ -22,13 +22,13 @@ use collections::HashMap;
 use crashes::InitCrashHandler;
 use gpui::{App, AppContext, Application, AsyncApp, Bounds, PromptButton, QuitMode, SharedString, TaskExt, TitlebarOptions, WindowBounds, WindowOptions, block_on, px, size};
 use gpui_platform;
-use guise::theme::Theme;
 use smol::future::poll_once;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Instant;
 use std::{io, process};
+use gpui_kit::component::Root;
 use util::ResultExt;
 use release_channel::{AppCommitSha, AppVersion};
 use workspace::multi_workspace::MultiWorkspace;
@@ -43,7 +43,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn build_application() -> Application {
     let platform = gpui_platform::current_platform(false);
     if std::env::var("BIT7Z_EXPERIMENTAL_A11Y").as_deref() == Ok("1") {
-        Application::with_platform(platform)
+        gpui_kit::application()
     } else {
         Application::new_inaccessible(platform)
     }
@@ -251,7 +251,8 @@ fn main() {
     #[cfg(windows)]
     check_for_conpty_dll();
 
-    let app = build_application().with_assets(Assets);
+    let app = build_application()
+        .with_assets(gpui_kit::assets::Assets);
 
     let background_executor = app.background_executor();
 
@@ -299,9 +300,9 @@ fn main() {
 
 
     app.run(move |cx| {
-        Theme::dark().init(cx);
+        gpui_kit::init(cx);
 
-        MultiWorkspace::init(cx);
+        // MultiWorkspace::init(cx);
 
         load_embedded_fonts(cx);
 
@@ -338,9 +339,10 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            move |_window, cx| {
+            move |window, cx| {
                 let paths = args.paths.clone();
-                cx.new(|cx| MultiWorkspace::new(paths, cx))
+                let view = cx.new(|cx| MultiWorkspace::new(window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
             },
         )
         .expect("failed to open window");

@@ -11,8 +11,6 @@ use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     WeakEntity, Window, div, px,
 };
-use guise::prelude::*;
-use guise::theme::Theme;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
