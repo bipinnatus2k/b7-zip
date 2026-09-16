@@ -9,8 +9,9 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-explorer-model.workspace = true
-explorer-view.workspace = true
+gpui.workspace = true
+#explorer-model.workspace = true
+#explorer-view.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
