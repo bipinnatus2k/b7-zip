@@ -1,6 +1,5 @@
-use gpui::{prelude::*, svg, Action, AnyElement, Hsla, MouseButton, Window, WindowButton, MAX_BUTTONS_PER_SIDE, App, ElementId, div};
+use gpui::{prelude::*, svg, Action, AnyElement, Hsla, MouseButton, Window, WindowButton, MAX_BUTTONS_PER_SIDE, App, ElementId, div, hsla};
 use ui::components::stack::h_flex;
-use ui::prelude::*;
 use ui::styles::system;
 
 #[derive(IntoElement)]

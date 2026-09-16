@@ -1,6 +1,4 @@
-use gpui::{prelude::*, Hsla, Pixels, Rgba, WindowControlArea, Window, App, div, px, relative};
-
-use ui::prelude::*;
+use gpui::{prelude::*, Hsla, Pixels, Rgba, WindowControlArea, Window, App, div, px, relative, hsla};
 
 #[derive(IntoElement)]
 pub struct WindowsWindowControls {
