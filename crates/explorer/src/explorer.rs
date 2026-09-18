@@ -174,35 +174,50 @@ impl ArchiveExplorer {
     }
 
     /// Copies dropped external files into the current directory as unstaged
-    /// additions.
+    /// additions. The copies run on the background executor (same shape as
+    /// the workspace's Add-files flow): a large drop must neither block the
+    /// UI thread nor hold the session mutex on it.
     fn ingest_dropped(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
-        let Some(session) = &self.session else {
+        let Some(session) = self.session.clone() else {
             return;
         };
         let current = self.current_path.clone();
-        let mut added = 0usize;
-        {
-            let mut session = session.lock().expect("session lock poisoned");
-            for path in paths {
-                if path.is_dir() {
-                    continue; // directory recursion lands with the Add-folder flow
-                }
-                let Some(name) = path.file_name() else {
-                    continue;
-                };
-                let rel = if current.is_empty() {
-                    name.to_string_lossy().to_string()
-                } else {
-                    format!("{current}/{}", name.to_string_lossy())
-                };
-                if session.ingest_file(path, &rel).is_ok() {
-                    added += 1;
-                }
+        let files: Vec<std::path::PathBuf> = paths
+            .iter()
+            .filter(|path| !path.is_dir()) // directory recursion lands with the Add-folder flow
+            .cloned()
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let added = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut session = session.lock().expect("session lock poisoned");
+                    let mut added = 0usize;
+                    for file in files {
+                        let Some(name) = file.file_name() else {
+                            continue;
+                        };
+                        let rel = if current.is_empty() {
+                            name.to_string_lossy().to_string()
+                        } else {
+                            format!("{current}/{}", name.to_string_lossy())
+                        };
+                        if session.ingest_file(&file, &rel).is_ok() {
+                            added += 1;
+                        }
+                    }
+                    added
+                })
+                .await;
+            if added > 0 {
+                let _ = weak.update(cx, |this, cx| this.refresh(cx));
             }
-        }
-        if added > 0 {
-            self.refresh(cx);
-        }
+        })
+        .detach();
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
