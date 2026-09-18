@@ -13,6 +13,7 @@ path = "src/lib.rs"
 checksum.workspace = true
 task.workspace = true
 temp.workspace = true
+windows-core.workspace = true
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

@@ -1,0 +1,5 @@
+# Windows main threads default to a 1 MiB stack, which debug builds of GPUI
+# render paths overflow easily (deep element trees, unoptimized frames).
+# Reserve 32 MiB for the main thread via the PE header.
+[target.'cfg(windows)']
+rustflags = ["-C", "link-args=/STACK:33554432"]

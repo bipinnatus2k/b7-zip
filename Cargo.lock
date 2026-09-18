@@ -263,7 +263,9 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "settings",
  "smol",
+ "tray",
  "util",
  "windows 0.61.3",
  "workspace",
@@ -276,7 +278,6 @@ dependencies = [
  "gpui-pre",
  "schemars",
  "serde",
- "util",
 ]
 
 [[package]]
@@ -797,8 +798,12 @@ checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
 name = "bit7z-explorer"
 version = "0.1.0"
 dependencies = [
+ "gpui-kit",
  "gpui-pre",
+ "session",
+ "temp",
  "tempfile",
+ "vfs",
 ]
 
 [[package]]
@@ -1311,6 +1316,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compare"
+version = "0.1.0"
+dependencies = [
+ "checksum",
+ "imara-diff",
+ "vfs",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1634,6 +1648,7 @@ dependencies = [
  "serde",
  "serde_json",
  "system_specs",
+ "ureq",
  "windows 0.61.3",
  "zstd",
 ]
@@ -2178,13 +2193,33 @@ dependencies = [
 name = "executor"
 version = "0.1.0"
 dependencies = [
- "bit7z-explorer",
  "bit7z-rs",
  "clap",
+ "gpui-kit",
  "gpui-pre",
  "gpui-pre-platform",
  "password",
  "task",
+ "ui",
+]
+
+[[package]]
+name = "explorer-menu"
+version = "0.1.0"
+dependencies = [
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+]
+
+[[package]]
+name = "explorer-menu-host"
+version = "0.1.0"
+dependencies = [
+ "checksum",
+ "explorer-menu",
+ "task",
+ "temp",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -3097,7 +3132,7 @@ dependencies = [
  "log",
  "rustls",
  "rustls-platform-verifier",
- "webpki-roots",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -3505,7 +3540,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "gpui-router-macros",
- "hashbrown 0.14.5",
+ "hashbrown 0.17.1",
  "matchit",
  "smallvec",
 ]
@@ -3604,10 +3639,6 @@ name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
- "allocator-api2",
-]
 
 [[package]]
 name = "hashbrown"
@@ -3634,6 +3665,11 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "heapless"
@@ -4015,6 +4051,15 @@ name = "imagesize"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09e54e57b4c48b40f7aec75635392b12b3421fa26fe8b4332e63138ed278459c"
+
+[[package]]
+name = "imara-diff"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17d34b7d42178945f775e84bc4c36dde7c1c6cdfea656d3354d009056f2bb3d2"
+dependencies = [
+ "hashbrown 0.15.5",
+]
 
 [[package]]
 name = "imgref"
@@ -5965,6 +6010,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 name = "platform_title_bar"
 version = "0.1.0"
 dependencies = [
+ "gpui-kit",
  "gpui-pre",
  "smallvec",
  "ui",
@@ -7363,6 +7409,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "settings"
+version = "0.1.0"
+dependencies = [
+ "gpui-pre",
+ "paths",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7981,9 +8038,11 @@ dependencies = [
  "password",
  "serde",
  "serde_json",
+ "temp",
  "tempfile",
  "thiserror 2.0.20",
  "vfs",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -8012,7 +8071,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.5.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
@@ -8424,6 +8483,7 @@ name = "tray"
 version = "0.1.0"
 dependencies = [
  "gpui-pre",
+ "gpui-tray",
 ]
 
 [[package]]
@@ -8583,6 +8643,22 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
 
 [[package]]
 name = "url"
@@ -9082,6 +9158,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -9653,6 +9738,7 @@ dependencies = [
  "task",
  "temp",
  "windows 0.61.3",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -10004,15 +10090,28 @@ name = "workspace"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "app_action",
  "bit7z-explorer",
  "bit7z-rs",
+ "compare",
+ "crashes",
+ "dunce",
+ "fs_watcher",
  "gpui-kit",
  "gpui-pre",
+ "log",
+ "multi-workspace-core",
+ "password",
+ "paths",
  "rfd",
  "serde",
  "serde_json",
  "session",
+ "settings",
+ "task",
+ "temp",
  "ui",
+ "vfs",
 ]
 
 [[package]]

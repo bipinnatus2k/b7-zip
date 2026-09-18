@@ -7,15 +7,19 @@
 
 use bit7z_rs::{ArchiveEngine, Bit7zEngine};
 use clap::Parser;
-use gpui::{
-    AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, div, px,
-};
+use gpui::{AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, WeakEntity, Window, div, px};
+use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::progress::Progress;
+use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::{Disableable, Sizable};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use task::{JobFile, JobSpec, TaskEvent, TaskRunner};
+use ui::util::format_size;
 
 /// Command-line arguments.
 #[derive(Parser, Debug)]
@@ -46,17 +50,18 @@ pub struct ExecutorApp {
     overwrite_query: Option<(String, SyncSender<bool>)>,
     engine: Option<Arc<dyn ArchiveEngine>>,
     self_entity: WeakEntity<Self>,
-    password_input: Entity<PasswordInput>,
+    password_state: Entity<InputState>,
     password_required: bool,
 }
 
 impl ExecutorApp {
-    pub fn new(job_path: PathBuf, password: Option<String>, cx: &mut Context<Self>) -> Self {
+    pub fn new(job_path: PathBuf, password: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let json = match std::fs::read_to_string(&job_path) {
             Ok(json) => json,
             Err(error) => {
                 return Self::failed(
                     format!("cannot read job file {}: {error}", job_path.display()),
+                    window,
                     cx,
                 );
             }
@@ -67,14 +72,16 @@ impl ExecutorApp {
         let job = match JobFile::from_json(&json) {
             Ok(job) => job,
             Err(error) => {
-                return Self::failed(format!("invalid job file: {error}"), cx);
+                return Self::failed(format!("invalid job file: {error}"), window, cx);
             }
         };
 
         let engine: Arc<dyn ArchiveEngine> =
             match Bit7zEngine::new(bit7z_rs::locate_dll().as_deref()) {
                 Ok(engine) => Arc::new(engine),
-                Err(error) => return Self::failed(format!("engine load failed: {error}"), cx),
+                Err(error) => {
+                    return Self::failed(format!("engine load failed: {error}"), window, cx)
+                }
             };
         let runner = TaskRunner::new(engine.clone());
         let cancel = Arc::new(AtomicBool::new(false));
@@ -82,6 +89,11 @@ impl ExecutorApp {
         eprintln!("executor: starting job {}", job.id);
         let rx = runner.run_with_cancel(job.spec.clone(), pw.as_ref(), cancel.clone());
 
+        let password_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Password")
+                .masked(true)
+        });
         let app = Self {
             job,
             state: ExecutorState::Running,
@@ -92,7 +104,7 @@ impl ExecutorApp {
             overwrite_query: None,
             engine: Some(engine),
             self_entity: cx.weak_entity(),
-            password_input: cx.new(|cx| PasswordInput::new(cx).label("Password")),
+            password_state,
             password_required: false,
         };
         // Poll the task event stream on the foreground executor.
@@ -116,7 +128,12 @@ impl ExecutorApp {
         app
     }
 
-    fn failed(message: String, cx: &mut Context<Self>) -> Self {
+    fn failed(message: String, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let password_state = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Password")
+                .masked(true)
+        });
         Self {
             job: JobFile::new(
                 "failed",
@@ -136,7 +153,7 @@ impl ExecutorApp {
             overwrite_query: None,
             engine: None,
             self_entity: cx.weak_entity(),
-            password_input: cx.new(|cx| PasswordInput::new(cx).label("Password")),
+            password_state,
             password_required: false,
         }
     }
@@ -202,7 +219,7 @@ impl ExecutorApp {
     }
 
     fn submit_password(&mut self, cx: &mut Context<Self>) {
-        let password = self.password_input.read(cx).text();
+        let password = self.password_state.read(cx).value().to_string();
         if password.is_empty() {
             return;
         }
@@ -269,7 +286,10 @@ fn spec_title(spec: &JobSpec) -> SharedString {
 
 impl Render for ExecutorApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = cx.global::<Theme>();
+        let (background, foreground, muted) = {
+            let theme = cx.theme();
+            (theme.background, theme.foreground, theme.muted_foreground)
+        };
         let title = spec_title(&self.job.spec);
         let (processed, total) = self.progress.unwrap_or((0, 0));
         let percent = if total > 0 {
@@ -289,21 +309,24 @@ impl Render for ExecutorApp {
                 .flex()
                 .flex_col()
                 .gap(px(10.0))
-                .child(self.password_input.clone())
+                .child(Input::new(&self.password_state))
                 .child(
                     div()
                         .flex()
                         .justify_end()
                         .gap(px(8.0))
                         .child(
-                            Button::new("pw-cancel", "Cancel")
-                                .size(Size::Xs)
-                                .variant(Variant::Light)
+                            Button::new("pw-cancel")
+                                .label("Cancel")
+                                .ghost()
+                                .xsmall()
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel_password(cx))),
                         )
                         .child(
-                            Button::new("pw-retry", "Retry")
-                                .size(Size::Xs)
+                            Button::new("pw-retry")
+                                .label("Retry")
+                                .primary()
+                                .xsmall()
                                 .on_click(cx.listener(|this, _, _, cx| this.submit_password(cx))),
                         ),
                 )
@@ -316,15 +339,17 @@ impl Render for ExecutorApp {
                         .flex()
                         .flex_col()
                         .gap(px(12.0))
-                        .child(Text::new(format!("{path} already exists.")).size(Size::Sm))
+                        .child(div().text_sm().child(format!("{path} already exists.")))
                         .child(
                             div()
                                 .flex()
                                 .justify_end()
                                 .gap(px(8.0))
                                 .child(
-                                    Button::new("overwrite", "Overwrite")
-                                        .size(Size::Xs)
+                                    Button::new("overwrite")
+                                        .label("Overwrite")
+                                        .primary()
+                                        .xsmall()
                                         .on_click(
                                             cx.listener(|this, _, _, _| {
                                                 this.answer_overwrite(true)
@@ -332,9 +357,10 @@ impl Render for ExecutorApp {
                                         ),
                                 )
                                 .child(
-                                    Button::new("skip", "Skip")
-                                        .size(Size::Xs)
-                                        .variant(Variant::Light)
+                                    Button::new("skip")
+                                        .label("Skip")
+                                        .ghost()
+                                        .xsmall()
                                         .on_click(cx.listener(|this, _, _, _| {
                                             this.answer_overwrite(false)
                                         })),
@@ -343,9 +369,9 @@ impl Render for ExecutorApp {
                 }
                 ExecutorState::Running => {
                     let bar = if total > 0 {
-                        Progress::new(percent)
+                        Progress::new("job-progress").value(percent)
                     } else {
-                        Progress::new(100.0).color(ColorName::Gray)
+                        Progress::new("job-progress").loading(true)
                     };
                     div()
                         .flex()
@@ -356,70 +382,72 @@ impl Render for ExecutorApp {
                             div()
                                 .flex()
                                 .justify_between()
-                                .child(
-                                    Text::new(format!(
-                                        "{} / {}",
-                                        bit7z_explorer::format_size(processed),
-                                        bit7z_explorer::format_size(total)
-                                    ))
-                                    .size(Size::Xs)
-                                    .dimmed(),
-                                )
-                                .child(Text::new(format!("{percent:.0}%")).size(Size::Xs).dimmed()),
+                                .text_color(muted)
+                                .text_xs()
+                                .child(format!("{} / {}", format_size(processed), format_size(total)))
+                                .child(div().child(format!("{percent:.0}%"))),
                         )
                         .child(
-                            Text::new(if current_file.is_empty() {
-                                "Working…"
-                            } else {
-                                &current_file
-                            })
-                            .size(Size::Sm)
-                            .dimmed(),
+                            div()
+                                .text_sm()
+                                .text_color(muted)
+                                .child(if current_file.is_empty() {
+                                    "Working…".to_string()
+                                } else {
+                                    current_file.clone()
+                                }),
                         )
                         .child(
                             div().flex().justify_end().child(
-                                Button::new(
-                                    "cancel",
-                                    if supports_cancel {
+                                Button::new("cancel")
+                                    .label(if supports_cancel {
                                         "Cancel"
                                     } else {
                                         "Cancel unavailable"
-                                    },
-                                )
-                                .size(Size::Xs)
-                                .color(ColorName::Red)
-                                .variant(Variant::Light)
-                                .disabled(!supports_cancel)
-                                .on_click(cx.listener(|this, _, _, _| this.cancel())),
+                                    })
+                                    .danger()
+                                    .xsmall()
+                                    .disabled(!supports_cancel)
+                                    .on_click(cx.listener(|this, _, _, _| this.cancel())),
                             ),
                         )
                 }
                 ExecutorState::Finished { success, message } => {
                     let cancelled = message == "operation cancelled";
-                    let color = if *success {
-                        ColorName::Green
+                    let (headline, accent) = if *success {
+                        ("Completed successfully", cx.theme().success)
                     } else if cancelled {
-                        ColorName::Yellow
+                        ("Cancelled", cx.theme().warning)
                     } else {
-                        ColorName::Red
-                    };
-                    let headline = if *success {
-                        "Completed successfully"
-                    } else if cancelled {
-                        "Cancelled"
-                    } else {
-                        "Failed"
+                        ("Failed", cx.theme().danger)
                     };
                     div()
                         .flex()
                         .flex_col()
                         .gap(px(10.0))
-                        .child(Alert::new(headline).color(color).variant(Variant::Light))
-                        .child(Text::new(message.clone()).size(Size::Sm).dimmed())
+                        .child(
+                            div()
+                                .rounded_sm()
+                                .border_1()
+                                .border_color(accent)
+                                .px_3()
+                                .py_2()
+                                .text_sm()
+                                .text_color(accent)
+                                .child(headline),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(muted)
+                                .child(message.clone()),
+                        )
                         .child(
                             div().flex().justify_end().child(
-                                Button::new("exit", "Exit")
-                                    .size(Size::Xs)
+                                Button::new("exit")
+                                    .label("Exit")
+                                    .primary()
+                                    .xsmall()
                                     .on_click(|_, _, cx| cx.quit()),
                             ),
                         )
@@ -432,21 +460,21 @@ impl Render for ExecutorApp {
             .size_full()
             .flex()
             .flex_col()
-            .bg(t.body().hsla())
-            .text_color(t.text().hsla())
+            .bg(background)
+            .text_color(foreground)
             .child(
                 div()
                     .p(px(20.0))
                     .flex()
                     .flex_col()
                     .gap(px(6.0))
-                    .child(Text::new(title).size(Size::Md).bold())
+                    .child(div().text_base().font_weight(FontWeight::BOLD).child(title))
                     .child(body),
             )
             .child(
                 StatusBar::new()
-                    .left(Text::new(format!("job: {}", self.job.id)).size(Size::Xs))
-                    .right(Text::new("bit7z-executor").size(Size::Xs).dimmed()),
+                    .left(div().text_xs().child(format!("job: {}", self.job.id)))
+                    .right(div().text_xs().text_color(muted).child("bit7z-executor")),
             )
     }
 }
@@ -457,7 +485,12 @@ fn main() {
     let app = gpui::Application::new_inaccessible(platform);
 
     app.run(move |cx| {
-        Theme::dark().init(cx);
+        gpui_kit::init(cx);
+        gpui_kit::component::theme::Theme::change(
+            gpui_kit::component::theme::ThemeMode::Dark,
+            None,
+            cx,
+        );
         let job = args.job.clone();
         let password = args.password.clone();
         cx.open_window(
@@ -468,7 +501,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| ExecutorApp::new(job, password, cx)),
+            |window, cx| cx.new(|cx| ExecutorApp::new(job, password, window, cx)),
         )
         .expect("failed to open executor window");
     });

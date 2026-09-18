@@ -18,4 +18,3 @@ workspace = true
 gpui.workspace = true
 schemars.workspace = true
 serde.workspace = true
-util.workspace = true
