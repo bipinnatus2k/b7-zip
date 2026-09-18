@@ -405,7 +405,9 @@ fn drain_events(rx: std::sync::mpsc::Receiver<task::TaskEvent>) -> Result<(), St
                 // Non-interactive CLI: refuse to guess on an `Ask` conflict.
                 let _ = reply.send(false);
             }
-            task::TaskEvent::Finished { success, message } => {
+            task::TaskEvent::Finished {
+                success, message, ..
+            } => {
                 if success {
                     println!("done");
                 } else {

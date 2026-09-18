@@ -6,7 +6,7 @@ use password::Password;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use task::{JobSpec, OverwriteSpec, TaskEvent, TaskRunner};
+use task::{JobSpec, OverwriteSpec, TaskErrorKind, TaskEvent, TaskRunner};
 
 fn engine() -> Option<Arc<dyn bit7z_rs::ArchiveEngine>> {
     let dll = bit7z_rs::locate_dll()?;
@@ -57,7 +57,7 @@ fn task_runner_extracts_header_encrypted_archive_with_password() {
         match rx.recv().expect("event") {
             TaskEvent::Progress { .. } | TaskEvent::FileStarted { .. } => {}
             TaskEvent::OverwriteConflict { .. } => panic!("no conflict expected"),
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished { success, message, .. } => {
                 assert!(success, "extract failed: {message}");
                 break;
             }
@@ -67,10 +67,11 @@ fn task_runner_extracts_header_encrypted_archive_with_password() {
     assert_eq!(std::fs::read_to_string(extracted).unwrap(), "classified content\n");
 }
 
-/// A wrong password on a header-encrypted archive fails at open time with
-/// the generic open error (the header cannot be decrypted, so 7-Zip reports
-/// an open failure rather than a password error). The manager keys its
-/// retry prompt on this exact string when the job carried a password.
+/// A wrong password on a header-encrypted archive fails at open time (the
+/// header cannot be decrypted). The engine classifies an open failure that
+/// carried a password as `WrongPassword`, and the runner forwards that as a
+/// typed `TaskErrorKind`, so the manager can key its retry prompt on the
+/// kind rather than the human-readable message.
 #[test]
 fn task_runner_wrong_password_reports_wrong_password() {
     let Some(engine) = engine() else {
@@ -106,12 +107,16 @@ fn task_runner_wrong_password_reports_wrong_password() {
         match rx.recv().expect("event") {
             TaskEvent::Progress { .. } | TaskEvent::FileStarted { .. } => {}
             TaskEvent::OverwriteConflict { .. } => panic!("no conflict expected"),
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished {
+                success,
+                message,
+                error,
+            } => {
                 assert!(!success);
-                assert!(
-                    message == "wrong password"
-                        || message.contains("Failed to open archive"),
-                    "message: {message}"
+                assert_eq!(
+                    error,
+                    Some(TaskErrorKind::WrongPassword),
+                    "expected a typed wrong-password error, got {error:?} ({message})"
                 );
                 break;
             }
@@ -154,7 +159,7 @@ fn task_runner_conflict_waits_for_reply() {
     );
     loop {
         match rx.recv().expect("event") {
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished { success, message, .. } => {
                 assert!(success, "{message}");
                 break;
             }
@@ -183,7 +188,7 @@ fn task_runner_conflict_waits_for_reply() {
                 let _ = reply.send(false); // skip
                 answered = true;
             }
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished { success, message, .. } => {
                 assert!(success, "{message}");
                 assert!(answered, "a conflict must have been raised");
                 break;

@@ -45,6 +45,7 @@ pub(crate) fn register_panels(cx: &mut App) {
         let _ = tx.send(task::TaskEvent::Finished {
             success: true,
             message: String::new(),
+            error: None,
         });
         panel_handle(cx.new(|cx| {
             crate::progress_panel::ProgressPanel::new(

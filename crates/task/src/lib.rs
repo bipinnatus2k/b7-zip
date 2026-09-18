@@ -10,7 +10,7 @@ pub use job::{
     AddItem, FormatSpec, JobFile, JobFileError, JobSpec, JOB_FILE_VERSION, LevelSpec,
     OverwriteSpec,
 };
-pub use runner::{CancelFlag, TaskEvent, TaskRunner, changeset_to_ops};
+pub use runner::{CancelFlag, TaskErrorKind, TaskEvent, TaskRunner, changeset_to_ops};
 
 #[cfg(test)]
 mod tests {

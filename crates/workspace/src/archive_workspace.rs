@@ -1394,22 +1394,32 @@ impl ArchiveWorkspace {
                     // task can ever run, so no completion is missed.
                     panel.set_on_finished({
                         let weak = weak.clone();
-                        move |app, success, message| {
+                        move |app, success, message, error| {
                             let _ = weak.update(app, |this, cx| {
-                                // Wrong passwords surface either as a dedicated
-                                // error or (on header-encrypted archives) as a
-                                // generic open failure; both are retryable.
+                                // The engine now classifies a header-encrypted
+                                // archive that a supplied password could not
+                                // open as WrongPassword at the boundary; an
+                                // open failure with no password is OpenFailed.
+                                // Either way this is the retryable-password case
+                                // the toolbar needs to surface, keyed on the
+                                // typed kind instead of the old message
+                                // substring match.
                                 let password_issue = !success
-                                    && (message == "wrong password"
-                                        || (password_was_supplied
-                                            && message.contains("Failed to open archive")));
+                                    && match error {
+                                        Some(task::TaskErrorKind::WrongPassword) => true,
+                                        Some(task::TaskErrorKind::OpenFailed) => {
+                                            password_was_supplied
+                                        }
+                                        _ => false,
+                                    };
                                 if password_issue {
                                     this.needs_password = true;
                                     this.status = Some(
                                         "Wrong password — use the toolbar button to retry".into(),
                                     );
                                 } else {
-                                    this.status = Some(job_result_message(success, message));
+                                    this.status =
+                                        Some(job_result_message(success, message, error));
                                 }
                                 if success {
                                     // Archive-rewriting jobs (add/delete) changed
@@ -1805,13 +1815,18 @@ fn open_with_association(path: &std::path::Path) {
 
 /// One-line, user-visible outcome of a background job. Kept in the status
 /// line until the next action replaces it, so fast jobs still give feedback.
-fn job_result_message(success: bool, message: &str) -> SharedString {
+fn job_result_message(
+    success: bool,
+    message: &str,
+    error: Option<task::TaskErrorKind>,
+) -> SharedString {
     if success {
         "Completed successfully".into()
-    } else if message == "operation cancelled" {
-        "Cancelled".into()
     } else {
-        format!("Failed: {message}").into()
+        match error {
+            Some(task::TaskErrorKind::Cancelled) => "Cancelled".into(),
+            _ => format!("Failed: {message}").into(),
+        }
     }
 }
 

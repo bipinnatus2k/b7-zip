@@ -20,8 +20,48 @@ pub enum TaskEvent {
         path: String,
         reply: SyncSender<bool>,
     },
-    /// The task finished (success or failure with a message).
-    Finished { success: bool, message: String },
+    /// The task finished. `error` classifies a failure by kind so consumers
+    /// never have to string-match the human-readable `message`.
+    Finished {
+        success: bool,
+        message: String,
+        error: Option<TaskErrorKind>,
+    },
+}
+
+/// Coarse classification of a failed job, derived from the engine error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskErrorKind {
+    /// The supplied (or dialog-entered) password did not unlock the archive.
+    WrongPassword,
+    /// The archive could not be opened: bad header, or a header-encrypted
+    /// archive queried without the right password.
+    OpenFailed,
+    /// An integrity test found failing entries.
+    Corrupted,
+    /// The user cancelled the operation.
+    Cancelled,
+    /// A filesystem-level failure.
+    Io,
+    /// Any other engine-level failure.
+    Engine,
+    /// Anything not covered above.
+    Other,
+}
+
+impl From<&bit7z_rs::ArchiveError> for TaskErrorKind {
+    fn from(error: &bit7z_rs::ArchiveError) -> Self {
+        use bit7z_rs::ArchiveError;
+        match error {
+            ArchiveError::WrongPassword => TaskErrorKind::WrongPassword,
+            ArchiveError::OpenFailed(_) => TaskErrorKind::OpenFailed,
+            ArchiveError::Corrupted(_) => TaskErrorKind::Corrupted,
+            ArchiveError::Cancelled => TaskErrorKind::Cancelled,
+            ArchiveError::Io(_) => TaskErrorKind::Io,
+            ArchiveError::Engine(_) => TaskErrorKind::Engine,
+            _ => TaskErrorKind::Other,
+        }
+    }
 }
 
 /// Executes archive tasks against an engine.
@@ -81,9 +121,11 @@ impl TaskRunner {
                 Ok(()) => "ok".to_string(),
                 Err(error) => error.to_string(),
             };
+            let error = result.as_ref().err().map(TaskErrorKind::from);
             let _ = tx.send(TaskEvent::Finished {
                 success: result.is_ok(),
                 message,
+                error,
             });
         });
         rx

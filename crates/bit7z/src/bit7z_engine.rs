@@ -50,8 +50,17 @@ impl Bit7zEngine {
         f: impl FnOnce(&ArchiveReader) -> Result<T, ArchiveError>,
     ) -> Result<T, ArchiveError> {
         let lib = self.lib.lock().unwrap();
-        let reader = ArchiveReader::open(&lib, &path_to_cstring(path)?, password)
-            .map_err(ArchiveError::Engine)?;
+        let reader = ArchiveReader::open(&lib, &path_to_cstring(path)?, password).map_err(
+            |_| match password {
+                // A supplied password that still cannot open the archive is
+                // the header-decryption failure the manager wants to treat as
+                // a retryable wrong password. (7-Zip reports no distinct code
+                // here — a null handle is all it gives.)
+                Some(_) => ArchiveError::WrongPassword,
+                // Without a password, an open failure is genuinely unreadable.
+                None => ArchiveError::OpenFailed(path.display().to_string()),
+            },
+        )?;
         let result = f(&reader);
         drop(reader);
         result

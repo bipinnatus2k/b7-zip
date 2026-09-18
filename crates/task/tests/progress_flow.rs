@@ -4,7 +4,7 @@
 use bit7z_rs::{ArchiveEngine, Bit7zEngine, CompressOptions};
 use password::Password;
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
-use task::{JobSpec, OverwriteSpec, TaskEvent, TaskRunner};
+use task::{JobSpec, OverwriteSpec, TaskErrorKind, TaskEvent, TaskRunner};
 
 fn engine() -> Option<Arc<dyn ArchiveEngine>> {
     let dll = bit7z_rs::locate_dll()?;
@@ -85,7 +85,7 @@ fn extract_emits_progress_events() {
             }
             TaskEvent::FileStarted { .. } => {}
             TaskEvent::OverwriteConflict { .. } => panic!("no conflict expected"),
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished { success, message, .. } => {
                 assert!(success, "{message}");
                 break;
             }
@@ -152,7 +152,7 @@ fn test_emits_progress_events() {
             }
             TaskEvent::FileStarted { .. } => {}
             TaskEvent::OverwriteConflict { .. } => panic!("no conflict expected"),
-            TaskEvent::Finished { success, message } => {
+            TaskEvent::Finished { success, message, .. } => {
                 assert!(success, "{message}");
                 break;
             }
@@ -219,15 +219,25 @@ fn test_job_fails_on_corrupted_archive() {
     );
     let mut finished = None;
     while let Ok(event) = rx.recv() {
-        if let TaskEvent::Finished { success, message } = event {
-            finished = Some((success, message));
+        if let TaskEvent::Finished {
+            success,
+            message,
+            error,
+        } = event
+        {
+            finished = Some((success, message, error));
             break;
         }
     }
-    let (success, message) = finished.expect("job must finish");
+    let (success, message, error) = finished.expect("job must finish");
     assert!(
         !success,
         "corrupted archive must not report success (message: {message})"
+    );
+    assert_eq!(
+        error,
+        Some(TaskErrorKind::Corrupted),
+        "integrity failure must classify as Corrupted, got {error:?} ({message})"
     );
     assert!(
         message.contains("failed the integrity test"),

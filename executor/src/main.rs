@@ -178,9 +178,13 @@ impl ExecutorApp {
                 Ok(TaskEvent::OverwriteConflict { path, reply }) => {
                     self.overwrite_query = Some((path, reply));
                 }
-                Ok(TaskEvent::Finished { success, message }) => {
+                Ok(TaskEvent::Finished {
+                    success,
+                    message,
+                    error,
+                }) => {
                     eprintln!("executor: finished success={success} message={message}");
-                    if !success && message == "wrong password" {
+                    if !success && error == Some(task::TaskErrorKind::WrongPassword) {
                         self.password_required = true;
                         self.state = ExecutorState::Running;
                         self.overwrite_query = None;

@@ -20,7 +20,7 @@ use gpui_kit::component::{ActiveTheme, Disableable as _, Icon, IconName, Sizable
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc::{Receiver, SyncSender}};
 use std::time::Instant;
-use task::TaskEvent;
+use task::{TaskErrorKind, TaskEvent};
 
 /// Poll cadence for the engine's event channel.
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -41,8 +41,11 @@ pub struct ProgressPanel {
     pause: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     rx: Option<Receiver<TaskEvent>>,
-    /// Host-side hook (workspace refresh etc.), invoked once on completion.
-    on_finished: Option<Box<dyn Fn(&mut App, bool, &str) + 'static>>,
+    /// Host-side hook (workspace refresh etc.), invoked once on completion
+    /// with (success, message, error-kind). The error kind lets the host
+    /// react to *what* failed (e.g. wrong password) without string-matching
+    /// the human-readable message.
+    on_finished: Option<Box<dyn Fn(&mut App, bool, &str, Option<TaskErrorKind>) + 'static>>,
     _poll: Option<Task<()>>,
 }
 
@@ -124,10 +127,11 @@ impl ProgressPanel {
         this
     }
 
-    /// Registers the completion hook, called once with (success, message).
+    /// Registers the completion hook, called once with
+    /// (success, message, error-kind).
     pub fn set_on_finished(
         &mut self,
-        cb: impl Fn(&mut App, bool, &str) + 'static,
+        cb: impl Fn(&mut App, bool, &str, Option<TaskErrorKind>) + 'static,
     ) {
         self.on_finished = Some(Box::new(cb));
     }
@@ -162,15 +166,22 @@ impl ProgressPanel {
                     self.conflict = Some((path, reply));
                     cx.notify();
                 }
-                Ok(TaskEvent::Finished { success, message }) => {
+                Ok(TaskEvent::Finished {
+                    success,
+                    message,
+                    error,
+                }) => {
                     self.finished = Some((success, message.clone()));
                     self.paused = false;
                     self.pause.store(false, Ordering::Relaxed);
                     self.rx = None;
                     self._poll = None;
-                    cx.emit(ProgressEvent::Finished { success, message: message.clone() });
+                    cx.emit(ProgressEvent::Finished {
+                        success,
+                        message: message.clone(),
+                    });
                     if let Some(on_finished) = self.on_finished.take() {
-                        on_finished(cx, success, &message);
+                        on_finished(cx, success, &message, error);
                     }
                     cx.notify();
                     return true;
