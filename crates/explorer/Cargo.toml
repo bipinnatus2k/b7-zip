@@ -10,8 +10,10 @@ workspace = true
 
 [dependencies]
 gpui.workspace = true
-#explorer-model.workspace = true
-#explorer-view.workspace = true
+gpui-kit.workspace = true
+session.workspace = true
+temp.workspace = true
+vfs.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
