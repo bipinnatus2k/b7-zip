@@ -56,6 +56,11 @@ pub struct ArchiveWorkspace {
     /// Whether the staging strip is pinned open even when the tree is clean.
     changes_open: bool,
     changes_scroll: UniformListScrollHandle,
+    /// Last staging snapshot. The session mutex is held for the whole
+    /// duration of a commit (background thread), so the per-frame read path
+    /// must not block on it; while the lock is busy the strip renders this
+    /// cache and refreshes on the next poll tick after the commit lands.
+    changes_cache: Vec<ChangeEntry>,
     /// The hosting window, for prompts and dialogs raised from events that
     /// carry no window. Filled by the host right after creation.
     window: Option<AnyWindowHandle>,
@@ -130,6 +135,7 @@ impl ArchiveWorkspace {
             pending_open: None,
             changes_open: false,
             changes_scroll: UniformListScrollHandle::new(),
+            changes_cache: Vec::new(),
             window: None,
             _subscriptions: subscriptions,
             _watch: None,
@@ -176,6 +182,7 @@ impl ArchiveWorkspace {
                 pending_open: None,
                 changes_open: false,
                 changes_scroll: UniformListScrollHandle::new(),
+                changes_cache: Vec::new(),
                 window: Some(window.window_handle()),
                 _subscriptions: subscriptions,
                 _watch: None,
@@ -387,7 +394,12 @@ impl ArchiveWorkspace {
         let Some(session) = &self.session else {
             return false;
         };
-        session.lock().expect("session lock poisoned").poll_events();
+        // `try_lock`: a running commit holds this mutex on the background
+        // thread for its whole duration. Events pile up in the watcher
+        // channel meanwhile and are drained on the next free tick.
+        if let Ok(mut session) = session.try_lock() {
+            session.poll_events();
+        }
         self.refresh_dirty(cx);
         true
     }
@@ -402,9 +414,19 @@ impl ArchiveWorkspace {
     }
 
     fn refresh_dirty(&mut self, cx: &mut Context<Self>) {
-        let dirty = self.session.as_ref().is_some_and(|session| {
-            session.lock().expect("session lock poisoned").has_changes()
-        });
+        let dirty = match self.session.as_ref() {
+            None => false,
+            Some(session) => {
+                // `try_lock` so a long-running commit (which holds this
+                // mutex on the background thread) never blocks the UI
+                // thread; keep the last known value meanwhile — `after_write`
+                // refreshes again once the commit lands.
+                match session.try_lock() {
+                    Ok(session) => session.has_changes(),
+                    Err(_) => return,
+                }
+            }
+        };
         if dirty != self.dirty {
             self.dirty = dirty;
             cx.notify();
@@ -466,16 +488,16 @@ impl ArchiveWorkspace {
     // Staging strip actions.
     // ----------------------------------------------------------------------
 
-    fn snapshot_changes(&self, cx: &Context<Self>) -> Vec<ChangeEntry> {
-        self.session
-            .as_ref()
-            .map(|session| {
-                session
-                    .lock()
-                    .expect("session lock poisoned")
-                    .changes()
-            })
-            .unwrap_or_default()
+    fn snapshot_changes(&mut self) -> Vec<ChangeEntry> {
+        match self.session.as_ref().map(|session| session.try_lock()) {
+            None => self.changes_cache = Vec::new(),
+            Some(Ok(session)) => self.changes_cache = session.changes(),
+            // Commit in progress (the background thread holds the mutex for
+            // the whole archive write): render the last snapshot. The strip
+            // refreshes on the next poll tick and on `after_write`.
+            Some(Err(_)) => {}
+        }
+        self.changes_cache.clone()
     }
 
     fn toggle_stage(&mut self, id: vfs::NodeId, cx: &mut Context<Self>) {
@@ -1399,7 +1421,7 @@ impl Render for ArchiveWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (muted, border) = (theme.muted_foreground, theme.border);
-        let changes = self.snapshot_changes(cx);
+        let changes = self.snapshot_changes();
         let staged_count = changes.iter().filter(|row| row.staged).count();
         let unstaged_count = changes.len() - staged_count;
 
