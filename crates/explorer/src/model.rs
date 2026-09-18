@@ -270,24 +270,10 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
-/// Format a byte count in a human-readable form.
-pub fn format_size(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    if bytes == 0 {
-        return "0 B".into();
-    }
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1024.0 && unit < UNITS.len() - 1 {
-        value /= 1024.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{} B", bytes)
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
+/// Format a byte count in a human-readable form. Single home in the `ui`
+/// design system; re-exported so the file table and properties dialog use
+/// one implementation.
+pub use ui::util::format_size;
 
 #[cfg(test)]
 mod tests {
@@ -321,14 +307,6 @@ mod tests {
         assert_eq!(natural_cmp("", "a"), Ordering::Less);
     }
 
-    #[test]
-    fn format_size_scales() {
-        assert_eq!(format_size(0), "0 B");
-        assert_eq!(format_size(512), "512 B");
-        assert_eq!(format_size(1024), "1.0 KB");
-        assert_eq!(format_size(1536), "1.5 KB");
-        assert_eq!(format_size(1024 * 1024), "1.0 MB");
-    }
 
     #[test]
     fn attr_string_letters() {

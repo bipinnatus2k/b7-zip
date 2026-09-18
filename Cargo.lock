@@ -803,6 +803,7 @@ dependencies = [
  "session",
  "temp",
  "tempfile",
+ "ui",
  "vfs",
 ]
 
