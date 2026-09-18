@@ -1,0 +1,20 @@
+[package]
+name = "explorer-menu-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "b7zmenu"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+checksum.workspace = true
+explorer-menu.workspace = true
+task.workspace = true
+temp.workspace = true
+windows.workspace = true

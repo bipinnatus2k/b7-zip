@@ -110,8 +110,12 @@ pub enum Commands {
         #[arg(long)]
         password: Option<String>,
     },
-    /// Register shell context menu entries
+    /// Register shell context menu entries (legacy COM, Windows 10+)
     ShellInstall,
-    /// Unregister shell context menu entries
+    /// Unregister shell context menu entries (legacy COM)
     ShellUninstall,
+    /// Register the Windows 11 Explorer context menu (sparse MSIX)
+    ShellMenuInstall,
+    /// Unregister the Windows 11 Explorer context menu (sparse MSIX)
+    ShellMenuUninstall,
 }

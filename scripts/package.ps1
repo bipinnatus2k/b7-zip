@@ -57,10 +57,11 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
 Copy-Item (Join-Path $root 'target/release/bit7zfm.exe') $dist
 Copy-Item (Join-Path $root 'target/release/bit7z-executor.exe') $dist
-Copy-Item (Join-Path $root 'target/release/shell.dll') $dist
+Copy-Item (Join-Path $root 'target/release/b7zmenu.dll') $dist
 Copy-Item (Join-Path $root 'target/release/bit7z.exe') $dist
 Copy-Item $sevenZip $dist
 Copy-Item (Join-Path $root 'crates/resources/bit7z.ico') $dist
+Copy-Item (Join-Path $root 'crates/explorer-menu-host/appxmanifest.xml') $dist
 
 Write-Host '[3/5] dist assembled'
 Get-ChildItem $dist | ForEach-Object { Write-Host ("    " + $_.Name + "  " + $_.Length + " bytes") }
@@ -68,11 +69,11 @@ Get-ChildItem $dist | ForEach-Object { Write-Host ("    " + $_.Name + "  " + $_.
 # ---------------------------------------------------------------------------
 # 5. Register the shell extension (HKCU, no admin)
 # ---------------------------------------------------------------------------
-Write-Host '[4/5] registering shell context menu...'
+Write-Host '[4/5] registering Explorer context menu (sparse MSIX)...'
 if (Test-Path (Join-Path $dist 'bit7z.exe')) {
-    & (Join-Path $dist 'bit7z.exe') shell-install
+    & (Join-Path $dist 'bit7z.exe') shell-menu-install
 } else {
-    Write-Host '    (bit7z.exe missing; run regsvr32 shell.dll manually)'
+    Write-Host '    (bit7z.exe missing; run bit7z shell-menu-install manually)'
 }
 
 Write-Host '[5/5] done:'

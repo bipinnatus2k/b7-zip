@@ -1,4 +1,5 @@
 mod arg;
+mod shell_menu;
 
 use arg::{Cli, Commands};
 use bit7z_rs::{ArchiveEngine, Bit7zEngine, OverwriteMode};
@@ -206,6 +207,8 @@ fn run(
         }
         Commands::ShellInstall => shell_control(true),
         Commands::ShellUninstall => shell_control(false),
+        Commands::ShellMenuInstall => shell_menu::install(),
+        Commands::ShellMenuUninstall => shell_menu::uninstall(),
     }
 }
 

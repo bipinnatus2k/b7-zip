@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparse MSIX package manifest for the Explorer context menu.
+
+  Registered per-user by `bit7z shell-menu-install` via PackageManager with
+  AllowExternalContent, so b7zmenu.dll stays beside the app binaries. The
+  Verb's Clsid must match explorer-menu-host's CLSID_BIT7ZFM_ROOT, and the
+  DLL must be registered under HKCU\Software\Classes\CLSID\<clsid>\
+  InprocServer32 (the installer does both). Unsigned sparse packages require
+  Developer Mode, or a self-signed certificate trusted on the target machine.
+  Works on Win10 2004+ (loaded after a reboot) and Win11 (top-level menu).
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    IgnorableNamespaces="uap3 rescap uap10">
+  <Identity Name="Bit7zFM.ShellMenu"
+            Publisher="CN=Bit7zFM"
+            Version="1.0.0.0"
+            ProcessorArchitecture="x64"/>
+  <Properties>
+    <DisplayName>Bit7zFM</DisplayName>
+    <PublisherDisplayName>Bit7zFM</PublisherDisplayName>
+    <Logo>bit7z.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+  <Dependencies>
+    <!-- Win10 2004 (19041) accepts sparse-package fileExplorerContextMenus
+         registrations too (verified on 19044: loaded after a reboot). Win11
+         shows the entries in the new top-level menu; Win10 surfaces them
+         after Explorer re-enumerates (full restart of the OS or Explorer). -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/>
+  </Dependencies>
+  <Applications>
+    <Application Id="ShellMenuApp"
+                 Executable="bit7zfm.exe"
+                 EntryPoint="windows.fullTrustApplication">
+      <uap3:Extensions>
+        <uap3:Extension Category="windows.fileExplorerContextMenus">
+          <uap3:FileExplorerContextMenus>
+            <Verb Id="Bit7zFM" Clsid="9B6F4A50-1E2B-4C7A-9F3D-5A7C-8E9B-0A01"/>
+          </uap3:FileExplorerContextMenus>
+        </uap3:Extension>
+      </uap3:Extensions>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust"/>
+  </Capabilities>
+</Package>

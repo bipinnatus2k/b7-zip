@@ -38,7 +38,9 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
 pub use windows::core::HRESULT;
-pub use windows::Win32::Foundation::{BOOL, HINSTANCE};
+pub use windows::core::BOOL;
+#[allow(unused_imports)]
+pub use windows::Win32::Foundation::HINSTANCE;
 
 /// Visibility/state of a menu entry as reported to Explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,12 +99,13 @@ impl Selection {
 
 /// A single executable entry inside a [`MenuRoot`] flyout.
 pub trait MenuAction: Send + Sync {
-    /// Display label shown by Explorer.
-    fn title(&self) -> String;
+    /// Display label shown by Explorer. Receives the pending selection so
+    /// labels can embed it (WinRAR-style: `Extract to "name\"`).
+    fn title(&self, selection: Option<&Selection>) -> String;
 
     /// Hover tooltip; defaults to [`MenuAction::title`].
-    fn tooltip(&self) -> Option<String> {
-        None
+    fn tooltip(&self, selection: Option<&Selection>) -> Option<String> {
+        Some(self.title(selection))
     }
 
     /// Icon path; relative paths resolve against the host DLL's directory.
@@ -225,7 +228,7 @@ pub fn set_error_reporter(reporter: Option<Box<ErrorReporter>>) {
 /// Call once from `DllMain` with `DLL_PROCESS_ATTACH`. Returns false when a
 /// previous call already installed a different registration.
 pub fn init(module: HINSTANCE, registration: Registration) -> bool {
-    let _ = unsafe { DisableThreadLibraryCalls(module) };
+    let _ = unsafe { DisableThreadLibraryCalls(HMODULE(module.0)) };
     if let Some(path) = module_path(module) {
         let _ = MODULE_PATH.set(path);
     }
@@ -289,7 +292,7 @@ fn show_message_box(title: &str, message: &str) {
     let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
     unsafe {
         MessageBoxW(
-            HWND(std::ptr::null_mut()),
+            None,
             PCWSTR(text.as_ptr()),
             PCWSTR(title.as_ptr()),
             MB_OK | MB_ICONERROR,
@@ -308,7 +311,7 @@ fn resolve_icon(base: Option<&Path>, icon: Option<&Path>) -> Option<PathBuf> {
 fn module_path(module: HINSTANCE) -> Option<PathBuf> {
     let mut buffer = [0u16; 32768];
     let module = HMODULE(module.0);
-    let len = unsafe { GetModuleFileNameW(Some(&module), &mut buffer) };
+    let len = unsafe { GetModuleFileNameW(Some(module), &mut buffer) };
     if len == 0 {
         return None;
     }
@@ -318,9 +321,8 @@ fn module_path(module: HINSTANCE) -> Option<PathBuf> {
 }
 
 fn extract_selection(items: Option<&IShellItemArray>) -> Result<Option<Selection>, String> {
-    let items = match items {
-        Some(items) => items,
-        None => return Ok(None),
+    let Some(items) = items else {
+        return Ok(None);
     };
     let count = unsafe { items.GetCount() }.map_err(|err| err.message().to_string())?;
     let mut paths = Vec::with_capacity(count as usize);
@@ -363,17 +365,17 @@ struct RootImpl {
 }
 
 impl IExplorerCommand_Impl for RootImpl_Impl {
-    fn GetTitle(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
+    fn GetTitle(&self, _items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
         alloc_pwstr(&self.root.title)
     }
 
-    fn GetIcon(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
+    fn GetIcon(&self, _items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
         resolve_icon(MODULE_PATH.get().map(PathBuf::as_path), self.root.icon.as_deref())
             .and_then(|path| path.to_str().map(alloc_pwstr))
             .unwrap_or_else(|| Err(E_NOTIMPL.into()))
     }
 
-    fn GetToolTip(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
+    fn GetToolTip(&self, _items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
         alloc_pwstr(self.root.tooltip.as_deref().unwrap_or(&self.root.title))
     }
 
@@ -383,7 +385,7 @@ impl IExplorerCommand_Impl for RootImpl_Impl {
 
     fn GetState(
         &self,
-        _items: Option<&IShellItemArray>,
+        _items: windows_core::Ref<'_, IShellItemArray>,
         _ok_to_be_slow: BOOL,
     ) -> windows::core::Result<u32> {
         Ok(ECS_ENABLED.0 as u32)
@@ -391,8 +393,8 @@ impl IExplorerCommand_Impl for RootImpl_Impl {
 
     fn Invoke(
         &self,
-        _items: Option<&IShellItemArray>,
-        _bind_ctx: Option<&IBindCtx>,
+        _items: windows_core::Ref<'_, IShellItemArray>,
+        _bind_ctx: windows_core::Ref<'_, IBindCtx>,
     ) -> windows::core::Result<()> {
         Ok(())
     }
@@ -420,11 +422,12 @@ struct ActionImpl {
 }
 
 impl IExplorerCommand_Impl for ActionImpl_Impl {
-    fn GetTitle(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
-        alloc_pwstr(&self.action.title())
+    fn GetTitle(&self, items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
+        let selection = extract_selection(items.as_ref()).unwrap_or(None);
+        alloc_pwstr(&self.action.title(selection.as_ref()))
     }
 
-    fn GetIcon(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
+    fn GetIcon(&self, _items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
         resolve_icon(
             MODULE_PATH.get().map(PathBuf::as_path),
             self.action.icon().as_deref(),
@@ -433,8 +436,12 @@ impl IExplorerCommand_Impl for ActionImpl_Impl {
         .unwrap_or_else(|| Err(E_NOTIMPL.into()))
     }
 
-    fn GetToolTip(&self, _items: Option<&IShellItemArray>) -> windows::core::Result<PWSTR> {
-        let tooltip = self.action.tooltip().unwrap_or_else(|| self.action.title());
+    fn GetToolTip(&self, items: windows_core::Ref<'_, IShellItemArray>) -> windows::core::Result<PWSTR> {
+        let selection = extract_selection(items.as_ref()).unwrap_or(None);
+        let tooltip = self
+            .action
+            .tooltip(selection.as_ref())
+            .unwrap_or_else(|| self.action.title(selection.as_ref()));
         alloc_pwstr(&tooltip)
     }
 
@@ -447,24 +454,24 @@ impl IExplorerCommand_Impl for ActionImpl_Impl {
 
     fn GetState(
         &self,
-        items: Option<&IShellItemArray>,
+        items: windows_core::Ref<'_, IShellItemArray>,
         _ok_to_be_slow: BOOL,
     ) -> windows::core::Result<u32> {
-        let selection = extract_selection(items).unwrap_or(None);
+        let selection = extract_selection(items.as_ref()).unwrap_or(None);
         Ok(self.action.state(selection.as_ref()).to_raw())
     }
 
     fn Invoke(
         &self,
-        items: Option<&IShellItemArray>,
-        _bind_ctx: Option<&IBindCtx>,
+        items: windows_core::Ref<'_, IShellItemArray>,
+        _bind_ctx: windows_core::Ref<'_, IBindCtx>,
     ) -> windows::core::Result<()> {
-        let result = match extract_selection(items) {
+        let result = match extract_selection(items.as_ref()) {
             Ok(selection) => self.action.invoke(selection.as_ref()),
             Err(err) => Err(err),
         };
         result.map_err(|err| {
-            show_error_box(&self.action.title(), &err);
+            show_error_box(&self.action.title(None), &err);
             E_FAIL.into()
         })
     }
@@ -555,7 +562,7 @@ struct ClassFactory {
 impl IClassFactory_Impl for ClassFactory_Impl {
     fn CreateInstance(
         &self,
-        outer: Option<&windows::core::IUnknown>,
+        outer: windows_core::Ref<'_, windows::core::IUnknown>,
         riid: *const GUID,
         object: *mut *mut c_void,
     ) -> windows::core::Result<()> {
@@ -667,7 +674,7 @@ mod tests {
         }
 
         impl MenuAction for FakeAction {
-            fn title(&self) -> String {
+            fn title(&self, _selection: Option<&Selection>) -> String {
                 self.title.to_string()
             }
 
@@ -736,7 +743,7 @@ mod tests {
                 CANONICAL_CLSID
             );
             assert_eq!(
-                unsafe { command.GetState(None, BOOL(0)) }.unwrap(),
+                unsafe { command.GetState(None, false) }.unwrap(),
                 ECS_DISABLED.0 as u32
             );
         }
