@@ -41,14 +41,17 @@ enum Zone {
 }
 
 fn zone_of(panel_name: &str) -> Option<Zone> {
-    match panel_name {
-        // All of these open as center tabs (open_center_panel); tools live in
-        // the side/bottom docks. A mismatch here makes enforce_zones evict
-        // the panel on the next LayoutChanged — it "never shows up".
-        "explorer" | "diff" | "progress" | "devtools" | "settings" | "EditorPanel"
-        | "WelcomePanel" => Some(Zone::Workspace),
-        "FilesPanel" | "OutlinePanel" | "OutputPanel" => Some(Zone::Tools),
-        _ => None,
+    // The names come from `panels::{CENTER_PANELS, TOOL_PANELS}`, the same
+    // set the factories are registered under, so adding a panel there is
+    // enough — no second hand-typed list to keep in sync (a stale entry
+    // would silently make `enforce_zones` evict the panel on the next
+    // LayoutChanged).
+    if crate::panels::CENTER_PANELS.contains(&panel_name) {
+        Some(Zone::Workspace)
+    } else if crate::panels::TOOL_PANELS.contains(&panel_name) {
+        Some(Zone::Tools)
+    } else {
+        None
     }
 }
 

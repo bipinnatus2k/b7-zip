@@ -9,6 +9,17 @@ pub(crate) use crate::panels::sidebar::SidebarPanel;
 
 pub mod sidebar;
 
+/// The canonical panel-name sets. `zone_of` in `multi_workspace` reads these
+/// so the layout-zone policy and the [`register_panels`] factories cannot
+/// drift apart (a name present in registration but absent here would be
+/// silently evicted by `enforce_zones`).
+///
+/// * [`CENTER_PANELS`] open as center workspace tabs.
+/// * [`TOOL_PANELS`] live in the side/bottom docks.
+pub(crate) const CENTER_PANELS: &[&str] =
+    &["explorer", "diff", "progress", "settings", "devtools"];
+pub(crate) const TOOL_PANELS: &[&str] = &["FilesPanel", "OutlinePanel", "OutputPanel"];
+
 /// Register every panel of this crate, so `DockArea::load` can rebuild a
 /// saved layout by looking `panel_name` up in this registry.
 pub(crate) fn register_panels(cx: &mut App) {
