@@ -298,6 +298,9 @@ pub type ConflictFn = dyn Fn(&str) -> bool + Send + Sync;
 pub struct ExtractOptions {
     pub overwrite: OverwriteMode,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// While set, the operation blocks inside its progress callback. The
+    /// pause must be released for cancellation to take effect.
+    pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Optional byte progress callback (invoked from the worker thread).
     pub progress: Option<std::sync::Arc<ProgressFn>>,
     /// Optional per-file callback (invoked from the worker thread).
@@ -321,6 +324,9 @@ pub struct CompressOptions {
     pub password: Option<String>,
     pub encrypt_headers: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// While set, the operation blocks inside its progress callback. The
+    /// pause must be released for cancellation to take effect.
+    pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Optional byte progress callback (invoked from the worker thread).
     pub progress: Option<std::sync::Arc<ProgressFn>>,
     /// Optional per-file callback (invoked from the worker thread).
@@ -341,10 +347,23 @@ impl Default for CompressOptions {
             password: None,
             encrypt_headers: false,
             cancel: None,
+            pause: None,
             progress: None,
             file: None,
         }
     }
+}
+
+/// Options for a test operation.
+#[derive(Clone, Default)]
+pub struct TestOptions {
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// While set, the operation blocks inside its progress callback.
+    pub pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional byte progress callback (invoked from the worker thread).
+    pub progress: Option<std::sync::Arc<ProgressFn>>,
+    /// Optional per-file callback (invoked from the worker thread).
+    pub file: Option<std::sync::Arc<FileFn>>,
 }
 
 /// Result of a test operation.
@@ -398,7 +417,21 @@ pub trait ArchiveEngine: Send + Sync {
         &self,
         path: &std::path::Path,
         password: Option<&password::Password>,
-    ) -> Result<TestResult, ArchiveError>;
+    ) -> Result<TestResult, ArchiveError> {
+        self.test_with_options(path, password, &TestOptions::default())
+    }
+
+    /// Like [`test`](Self::test) but streaming progress and honoring
+    /// cancel/pause. The default implementation ignores the options.
+    fn test_with_options(
+        &self,
+        path: &std::path::Path,
+        password: Option<&password::Password>,
+        options: &TestOptions,
+    ) -> Result<TestResult, ArchiveError> {
+        let _ = options;
+        self.test(path, password)
+    }
 
     /// Create a new archive at `target` from `inputs` (fs paths).
     fn compress(

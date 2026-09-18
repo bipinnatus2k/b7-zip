@@ -67,6 +67,9 @@ struct CallbackCtx {
     progress: Option<Arc<dyn Fn(u64, u64) + Send + Sync>>,
     file: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     cancel: Option<Arc<AtomicBool>>,
+    /// While set, the progress callback blocks (the pause). Cancellation is
+    /// still honored inside the wait so a paused job can be aborted.
+    pause: Option<Arc<AtomicBool>>,
     conflict: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
     auto_rename: Option<AutoRenameCtx>,
 }
@@ -93,6 +96,18 @@ unsafe extern "C" fn progress_trampoline(
         .is_some_and(|c| c.load(Ordering::Relaxed))
     {
         return 0;
+    }
+    if let Some(pause) = &ctx.pause {
+        while pause.load(Ordering::Relaxed) {
+            if ctx
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::Relaxed))
+            {
+                return 0;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     if let Some(progress) = &ctx.progress {
         progress(processed, total);
@@ -441,6 +456,7 @@ impl ArchiveEngine for Bit7zEngine {
                     progress: options.progress.clone(),
                     file: options.file.clone(),
                     cancel: options.cancel.clone(),
+                    pause: options.pause.clone(),
                     conflict: None,
                     auto_rename: Some(AutoRenameCtx {
                         dest: dest.to_path_buf(),
@@ -476,6 +492,7 @@ impl ArchiveEngine for Bit7zEngine {
         let with_callbacks = options.progress.is_some()
             || options.file.is_some()
             || options.cancel.is_some()
+            || options.pause.is_some()
             || options.on_conflict.is_some()
             || matches!(options.overwrite, OverwriteMode::Skip | OverwriteMode::Ask);
 
@@ -503,6 +520,7 @@ impl ArchiveEngine for Bit7zEngine {
                 progress: options.progress.clone(),
                 file: options.file.clone(),
                 cancel: options.cancel.clone(),
+                pause: options.pause.clone(),
                 conflict: options.on_conflict.clone(),
                 auto_rename: None,
             };
@@ -557,14 +575,36 @@ impl ArchiveEngine for Bit7zEngine {
         })
     }
 
-    fn test(
+    fn test_with_options(
         &self,
         path: &Path,
         password: Option<&password::Password>,
+        options: &crate::TestOptions,
     ) -> Result<TestResult, ArchiveError> {
+        let has_callbacks = options.progress.is_some()
+            || options.file.is_some()
+            || options.cancel.is_some()
+            || options.pause.is_some();
         self.with_reader(path, password, |reader| {
-            let (all_ok, total, failed_count, _, failed_errors) =
-                reader.test().map_err(ArchiveError::Engine)?;
+            let (all_ok, total, failed_count, _, failed_errors) = if has_callbacks {
+                let mut ctx = CallbackCtx {
+                    progress: options.progress.clone(),
+                    file: options.file.clone(),
+                    cancel: options.cancel.clone(),
+                    pause: options.pause.clone(),
+                    conflict: None,
+                    auto_rename: None,
+                };
+                reader
+                    .test_to_cb(
+                        &mut ctx as *mut CallbackCtx as *mut std::ffi::c_void,
+                        Some(progress_trampoline),
+                        Some(file_trampoline_reader),
+                    )
+                    .map_err(ArchiveError::Engine)?
+            } else {
+                reader.test().map_err(ArchiveError::Engine)?
+            };
             Ok(TestResult {
                 all_ok,
                 total,
@@ -616,13 +656,16 @@ impl ArchiveEngine for Bit7zEngine {
             .to_str()
             .ok_or_else(|| ArchiveError::Engine("target path not UTF-8".into()))?;
 
-        let with_callbacks =
-            options.progress.is_some() || options.file.is_some() || options.cancel.is_some();
+        let with_callbacks = options.progress.is_some()
+            || options.file.is_some()
+            || options.cancel.is_some()
+            || options.pause.is_some();
         let result = if with_callbacks {
             let mut ctx = CallbackCtx {
                 progress: options.progress.clone(),
                 file: options.file.clone(),
                 cancel: options.cancel.clone(),
+                pause: options.pause.clone(),
                 conflict: None,
                 auto_rename: None,
             };

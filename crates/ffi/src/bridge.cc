@@ -41,6 +41,7 @@ void* (*force_bit7z_reader_free_buffer)(void) = (void* (*)(void)) &bit7z_reader_
 void* (*force_bit7z_reader_extract_to_buffer_c)(void) = (void* (*)(void)) &bit7z_reader_extract_to_buffer_c;
 void* (*force_bit7z_reader_extract_item_data)(void) = (void* (*)(void)) &bit7z_reader_extract_item_data;
 void* (*force_bit7z_reader_test)(void) = (void* (*)(void)) &bit7z_reader_test;
+void* (*force_bit7z_reader_test_to_cb)(void) = (void* (*)(void)) &bit7z_reader_test_to_cb;
 void* (*force_bit7z_test_result_total)(void) = (void* (*)(void)) &bit7z_test_result_total;
 void* (*force_bit7z_test_result_failed_count)(void) = (void* (*)(void)) &bit7z_test_result_failed_count;
 void* (*force_bit7z_test_result_all_ok)(void) = (void* (*)(void)) &bit7z_test_result_all_ok;

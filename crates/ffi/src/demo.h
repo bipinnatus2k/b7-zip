@@ -327,6 +327,80 @@ extern "C" inline void* bit7z_reader_test(void* reader_ptr) {
     }
 }
 
+// ===== Callback-based test (progress/cancel; file-level progress) =====
+// on_progress: return 0=cancel, non-zero=continue
+// Returns a heap TestResult (see bit7z_test_result_* accessors).
+extern "C" inline void* bit7z_reader_test_to_cb(
+    void* reader_ptr,
+    void* ctx,
+    int32_t (*on_progress)(uint64_t processed, uint64_t total, void* ctx),
+    void   (*on_file)(const char* path, uint64_t file_size, void* ctx)
+) {
+    try {
+        auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto sharedTotal = std::make_shared<uint64_t>(0);
+        // 7-Zip's byte-level completed value is unreliable during extraction
+        // and testing, so progress is accumulated per started file (the same
+        // approach as extract_to_cb above), with a final 100% push.
+        auto sharedProcessed = std::make_shared<uint64_t>(0);
+        auto fileIndex = std::make_shared<uint32_t>(0);
+
+        reader.setTotalCallback([sharedTotal](uint64_t total) {
+            *sharedTotal = total;
+        });
+        if (on_progress) {
+            reader.setProgressCallback([ctx, on_progress, sharedTotal, sharedProcessed](uint64_t processed) -> bool {
+                uint64_t best = processed > *sharedProcessed ? processed : *sharedProcessed;
+                return on_progress(best, *sharedTotal, ctx) != 0;
+            });
+        }
+        reader.setFileCallback([&reader, ctx, on_progress, on_file, fileIndex, sharedProcessed, sharedTotal](const bit7z::tstring& path) {
+            uint32_t idx = (*fileIndex)++;
+            uint64_t fileSize = 0;
+            if (idx < reader.itemsCount()) {
+                auto itemPtr = bit7z_item_from_reader(&reader, idx);
+                if (itemPtr) {
+                    auto* item = static_cast<bit7z::BitArchiveItem*>(itemPtr);
+                    fileSize = item->size();
+                }
+            }
+            if (on_progress) {
+                *sharedProcessed += fileSize;
+                on_progress(*sharedProcessed, *sharedTotal, ctx);
+            }
+            if (on_file) {
+                on_file(path.c_str(), fileSize, ctx);
+            }
+        });
+
+        reader.test();
+
+        if (on_progress) {
+            *sharedProcessed = *sharedTotal;
+            on_progress(*sharedTotal, *sharedTotal, ctx);
+        }
+        reader.setFileCallback(nullptr);
+        reader.setProgressCallback(nullptr);
+        reader.setTotalCallback(nullptr);
+
+        auto* result = new TestResult();
+        result->all_ok = true;
+        result->total = reader.itemsCount();
+        result->failed_count = 0;
+        return static_cast<void*>(result);
+    } catch (const bit7z::BitException& e) {
+        auto* result = new TestResult();
+        result->all_ok = false;
+        result->total = 0;
+        result->failed_count = 1;
+        result->failed_paths.push_back("");
+        result->failed_errors.push_back(e.what());
+        return static_cast<void*>(result);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 extern "C" inline uint32_t bit7z_test_result_total(void* result_ptr) {
     return static_cast<TestResult*>(result_ptr)->total;
 }
@@ -877,19 +951,29 @@ inline int32_t bit7z_reader_extract_to_cb(
 
         // Shared state for total size (set by TotalCallback, read by ProgressCallback)
         auto sharedTotal = std::make_shared<uint64_t>(0);
+        // 7-Zip does not reliably report SetCompleted on extraction (the
+        // progress callback then sees processed == 0); SetRatioInfo's
+        // out_size is the real decompressed-so-far byte count, so it drives
+        // the reported progress.
+        auto sharedProcessed = std::make_shared<uint64_t>(0);
 
         if (on_progress) {
             reader.setTotalCallback([sharedTotal](uint64_t total) {
                 *sharedTotal = total;
             });
-            reader.setProgressCallback([ctx, on_progress, sharedTotal](uint64_t processed) -> bool {
-                return on_progress(processed, *sharedTotal, ctx) != 0;
+            reader.setProgressCallback([ctx, on_progress, sharedTotal, sharedProcessed](uint64_t processed) -> bool {
+                uint64_t best = processed > *sharedProcessed ? processed : *sharedProcessed;
+                return on_progress(best, *sharedTotal, ctx) != 0;
+            });
+            reader.setRatioCallback([ctx, on_progress, sharedTotal, sharedProcessed](uint64_t /*in_size*/, uint64_t out_size) {
+                *sharedProcessed = out_size;
+                on_progress(out_size, *sharedTotal, ctx);
             });
         }
 
         if (on_overwrite || on_file) {
             auto fileIndex = std::make_shared<uint32_t>(0);
-            reader.setFileCallback([&reader, &destDir, ctx, on_overwrite, on_file, fileIndex, indices, count](const bit7z::tstring& path) {
+            reader.setFileCallback([&reader, &destDir, ctx, on_overwrite, on_file, on_progress, fileIndex, indices, count, sharedProcessed, sharedTotal](const bit7z::tstring& path) {
                 uint32_t idx = (*fileIndex)++;
 
                 // Look up source item info
@@ -902,6 +986,14 @@ inline int32_t bit7z_reader_extract_to_cb(
                         fileSize = item->size();
                         srcMtime = static_cast<int64_t>(std::chrono::system_clock::to_time_t(item->lastWriteTime()));
                     }
+                }
+
+                // File-level progress: 7-Zip's byte-level completed value is
+                // unreliable for extraction, so accumulate each started
+                // file's size and report the running sum.
+                if (on_progress) {
+                    *sharedProcessed += fileSize;
+                    on_progress(*sharedProcessed, *sharedTotal, ctx);
                 }
 
                 if (on_file) {
@@ -930,6 +1022,13 @@ inline int32_t bit7z_reader_extract_to_cb(
         std::vector<uint32_t> idxs(indices, indices + count);
         reader.extractTo(bit7z::tstring(dest_path ? dest_path : ""), idxs);
 
+        if (on_progress) {
+            // Final tick so the UI lands at 100% even when the last file's
+            // file-callback fired before its bytes finished writing.
+            *sharedProcessed = *sharedTotal;
+            on_progress(*sharedTotal, *sharedTotal, ctx);
+        }
+
         // Reset callbacks to avoid accidental reuse
         reader.setFileCallback(nullptr);
         reader.setProgressCallback(nullptr);
@@ -955,11 +1054,18 @@ inline int32_t bit7z_reader_extract_with_rename(
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
         auto sharedTotal = std::make_shared<uint64_t>(0);
+        // Ratio-based progress for extraction: see extract_to_cb above.
+        auto sharedProcessed = std::make_shared<uint64_t>(0);
 
         if (on_progress) {
             reader.setTotalCallback([sharedTotal](uint64_t total) { *sharedTotal = total; });
-            reader.setProgressCallback([ctx, on_progress, sharedTotal](uint64_t processed) -> bool {
-                return on_progress(processed, *sharedTotal, ctx) != 0;
+            reader.setProgressCallback([ctx, on_progress, sharedTotal, sharedProcessed](uint64_t processed) -> bool {
+                uint64_t best = processed > *sharedProcessed ? processed : *sharedProcessed;
+                return on_progress(best, *sharedTotal, ctx) != 0;
+            });
+            reader.setRatioCallback([ctx, on_progress, sharedTotal, sharedProcessed](uint64_t /*in_size*/, uint64_t out_size) {
+                *sharedProcessed = out_size;
+                on_progress(out_size, *sharedTotal, ctx);
             });
         }
         if (on_file) {

@@ -4,6 +4,29 @@
 //! discoverable via `VCPKG_ROOT`; they are skipped otherwise.
 
 use bit7z_rs::{ArchiveEngine, Bit7zEngine, CompressOptions, WriterFormat};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// The bit7z C++ layer is single-threaded across *all* engine instances,
+/// and `cargo test --workspace` runs the integration-test binaries of
+/// different crates as separate processes. Hold a cross-process file lock
+/// (plus the in-process mutex for same-binary parallelism) for the whole
+/// body of every engine-using test.
+fn engine_lock() -> Arc<Mutex<()>> {
+    static LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
+    LOCK.get_or_init(|| Arc::new(Mutex::new(()))).clone()
+}
+
+fn engine_process_lock() -> std::fs::File {
+    let path = std::env::temp_dir().join("bit7z-engine-tests.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .expect("create engine lock file");
+    file.lock().expect("lock engine file");
+    file
+}
 
 fn engine() -> Option<Bit7zEngine> {
     let dll = bit7z_rs::locate_dll()?;
@@ -12,6 +35,8 @@ fn engine() -> Option<Bit7zEngine> {
 
 #[test]
 fn roundtrip_7z_with_chinese_names() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -74,6 +99,8 @@ fn roundtrip_7z_with_chinese_names() {
 
 #[test]
 fn roundtrip_zip() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -115,6 +142,8 @@ fn roundtrip_zip() {
 
 #[test]
 fn extract_to_buffer() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -135,6 +164,8 @@ fn extract_to_buffer() {
 
 #[test]
 fn update_add_delete_rename() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -185,6 +216,8 @@ fn update_add_delete_rename() {
 
 #[test]
 fn password_protected_roundtrip() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -215,6 +248,8 @@ fn password_protected_roundtrip() {
 
 #[test]
 fn extract_empty_file_to_buffer() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;
@@ -237,6 +272,8 @@ fn extract_empty_file_to_buffer() {
 
 #[test]
 fn auto_rename_keeps_existing_file() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
     let Some(engine) = engine() else {
         eprintln!("skipped: 7zip.dll not found");
         return;

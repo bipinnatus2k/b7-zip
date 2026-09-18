@@ -38,6 +38,7 @@ unsafe extern "C" {
     pub fn bit7z_reader_free_buffer(data: *mut std::ffi::c_void) -> ();
     pub fn bit7z_reader_extract_item_data(reader_ptr: *mut std::ffi::c_void, index: u32) -> *mut std::ffi::c_void;
     pub fn bit7z_reader_test(reader_ptr: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    pub fn bit7z_reader_test_to_cb(reader_ptr: *mut std::ffi::c_void, ctx: *mut std::ffi::c_void, on_progress: Option<unsafe extern "C" fn(u64, u64, *mut std::ffi::c_void) -> i32>, on_file: Option<unsafe extern "C" fn(*const std::ffi::c_char, u64, *mut std::ffi::c_void)>) -> *mut std::ffi::c_void;
     pub fn bit7z_test_result_total(result_ptr: *mut std::ffi::c_void) -> u32;
     pub fn bit7z_test_result_failed_count(result_ptr: *mut std::ffi::c_void) -> u32;
     pub fn bit7z_test_result_all_ok(result_ptr: *mut std::ffi::c_void) -> i32;

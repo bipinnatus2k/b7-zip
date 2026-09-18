@@ -112,9 +112,45 @@ impl ArchiveReader {
         Self { raw }
     }
 
+    /// Test archive integrity with progress/file callbacks (same contract as
+    /// `extract_to_cb`'s callbacks; `on_progress` returning 0 aborts).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // ctx is an opaque token passed through to callbacks
+    pub fn test_to_cb(
+        &self,
+        ctx: *mut std::ffi::c_void,
+        on_progress: Option<unsafe extern "C" fn(u64, u64, *mut std::ffi::c_void) -> i32>,
+        on_file: Option<unsafe extern "C" fn(*const std::ffi::c_char, u64, *mut std::ffi::c_void)>,
+    ) -> Result<(bool, u32, u32, Vec<String>, Vec<String>), String> {
+        let result = unsafe {
+            bit7z_ffi::bit7z_reader_test_to_cb(self.raw.as_ptr(), ctx, on_progress, on_file)
+        };
+        if result.is_null() {
+            return Err("test call failed".into());
+        }
+        let all_ok = unsafe { bit7z_ffi::bit7z_test_result_all_ok(result) } != 0;
+        let total = unsafe { bit7z_ffi::bit7z_test_result_total(result) };
+        let failed_count = unsafe { bit7z_ffi::bit7z_test_result_failed_count(result) };
+        let failed_paths = Vec::new();
+        let mut failed_errors = Vec::new();
+        if !all_ok && failed_count > 0 {
+            let error_msg = unsafe {
+                let ptr = bit7z_ffi::bit7z_test_result_error(result);
+                if ptr.is_null() {
+                    "test failed".to_string()
+                } else {
+                    std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned()
+                }
+            };
+            failed_errors.push(error_msg);
+        }
+        unsafe {
+            bit7z_ffi::bit7z_test_result_free(result);
+        }
+        Ok((all_ok, total, failed_count, failed_paths, failed_errors))
+    }
+
     /// Test archive integrity.
-    pub fn test(&self) -> Result<(bool, u32, u32, Vec<String>, Vec<String>), String> {
-        let result = unsafe { bit7z_ffi::bit7z_reader_test(self.raw.as_ptr()) };
+    pub fn test(&self) -> Result<(bool, u32, u32, Vec<String>, Vec<String>), String> {        let result = unsafe { bit7z_ffi::bit7z_reader_test(self.raw.as_ptr()) };
         if result.is_null() {
             return Err("test call failed".into());
         }
