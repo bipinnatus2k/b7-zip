@@ -51,11 +51,32 @@ impl TaskRunner {
         password: Option<&password::Password>,
         cancel: Arc<AtomicBool>,
     ) -> Receiver<TaskEvent> {
+        self.run_with_controls(job, password, cancel, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// Like [`run_with_cancel`](Self::run_with_cancel) but with an
+    /// additional pause flag: while it is set the operation blocks inside
+    /// its progress callback (a true pause — the engine thread is parked,
+    /// the event stream simply stops flowing).
+    pub fn run_with_controls(
+        &self,
+        job: JobSpec,
+        password: Option<&password::Password>,
+        cancel: Arc<AtomicBool>,
+        pause: Arc<AtomicBool>,
+    ) -> Receiver<TaskEvent> {
         let (tx, rx) = channel::<TaskEvent>();
         let engine = self.engine.clone();
         let password = password.cloned();
         std::thread::spawn(move || {
-            let result = run_job(engine.as_ref(), &job, password.as_ref(), &tx, &cancel);
+            let result = run_job_with_pause(
+                engine.as_ref(),
+                &job,
+                password.as_ref(),
+                &tx,
+                &cancel,
+                &pause,
+            );
             let message = match &result {
                 Ok(()) => "ok".to_string(),
                 Err(error) => error.to_string(),
@@ -69,12 +90,13 @@ impl TaskRunner {
     }
 }
 
-fn run_job(
+fn run_job_with_pause(
     engine: &dyn ArchiveEngine,
     job: &JobSpec,
     password: Option<&password::Password>,
     tx: &Sender<TaskEvent>,
     cancel: &Arc<AtomicBool>,
+    pause: &Arc<AtomicBool>,
 ) -> Result<(), bit7z_rs::ArchiveError> {
     match job {
         JobSpec::Extract {
@@ -116,6 +138,7 @@ fn run_job(
             let options = ExtractOptions {
                 overwrite: (*overwrite).into(),
                 cancel: Some(cancel.clone()),
+                pause: Some(pause.clone()),
                 progress: Some(progress),
                 file: Some(file),
                 on_conflict,
@@ -170,21 +193,35 @@ fn run_job(
                 password: password.map(|p| p.as_str().to_string()),
                 encrypt_headers: *encrypt_headers,
                 cancel: Some(cancel.clone()),
+                pause: Some(pause.clone()),
                 progress: Some(progress),
                 file: Some(file),
             };
             engine.compress(inputs, target, &options)
         }
         JobSpec::Test { archive, .. } => {
-            let result = engine.test(archive, password)?;
-            if result.all_ok {
-                Ok(())
-            } else {
-                Err(bit7z_rs::ArchiveError::Engine(format!(
-                    "{}/{} items failed: {:?}",
-                    result.failed_count, result.total, result.errors
-                )))
-            }
+            let progress = {
+                let tx = tx.clone();
+                Arc::new(move |processed: u64, total: u64| {
+                    let _ = tx.send(TaskEvent::Progress { processed, total });
+                }) as Arc<dyn Fn(u64, u64) + Send + Sync>
+            };
+            let file = {
+                let tx = tx.clone();
+                Arc::new(move |path: &str| {
+                    let _ = tx.send(TaskEvent::FileStarted {
+                        path: path.to_string(),
+                    });
+                }) as Arc<dyn Fn(&str) + Send + Sync>
+            };
+            let options = bit7z_rs::TestOptions {
+                cancel: Some(cancel.clone()),
+                pause: Some(pause.clone()),
+                progress: Some(progress),
+                file: Some(file),
+            };
+            engine.test_with_options(archive, password, &options)?;
+            Ok(())
         }
         JobSpec::Add { archive, items, .. } => {
             let ops: Vec<EngineOp> = items
