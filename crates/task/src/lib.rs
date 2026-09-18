@@ -2,6 +2,8 @@
 //! VFS changesets to engine operations.
 
 pub mod job;
+#[cfg(windows)]
+pub mod launch;
 pub mod runner;
 
 pub use job::{

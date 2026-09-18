@@ -14,8 +14,12 @@ checksum.workspace = true
 password.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+temp.workspace = true
 thiserror.workspace = true
 vfs.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
 
 [lints]
 workspace = true
