@@ -324,11 +324,38 @@ fn launch_job_in_executor(job: JobSpec, password: Option<String>) -> Result<(), 
     };
     let mut cmd = std::process::Command::new(executor);
     cmd.arg(&path);
-    if let Some(password) = password {
-        cmd.arg("--password").arg(password);
-    }
+    // The secret is handed over an inherited stdin pipe instead of a
+    // value parameter, which other processes can read. The pipe write
+    // happens below, after spawn.
+    let secret = match password {
+        None => None,
+        Some(secret) => {
+            cmd.arg("--password-stdin");
+            cmd.stdin(std::process::Stdio::piped());
+            Some(secret)
+        }
+    };
     hide_console_window(&mut cmd);
-    cmd.spawn().map_err(|e| format!("failed to launch executor: {e}"))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to launch executor: {e}"))?;
+    if let (Some(secret), Some(stdin)) = (secret, child.stdin.as_mut()) {
+        write_secret_to_child_stdin(stdin, &secret)?;
+    }
+    // Dropping the Child closes the pipe; the executor keeps running.
+    drop(child);
+    Ok(())
+}
+
+/// Writes the secret into the child's stdin and closes the write end so
+/// the executor observes EOF.
+fn write_secret_to_child_stdin(
+    stdin: &mut std::process::ChildStdin,
+    secret: &str,
+) -> Result<(), String> {
+    use std::io::Write;
+    stdin.write_all(secret.as_bytes()).map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())?;
     Ok(())
 }
 

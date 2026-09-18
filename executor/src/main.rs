@@ -27,9 +27,12 @@ use ui::util::format_size;
 struct Args {
     /// Job file to execute.
     job: PathBuf,
-    /// Optional password (never written to job files).
+    /// Read the password from stdin (until EOF) instead of argv: command
+    /// lines are readable by any same-user process. Never written to job
+    /// files either way — the secret only ever travels over the inherited
+    /// pipe or the interactive dialog.
     #[arg(long)]
-    password: Option<String>,
+    password_stdin: bool,
 }
 
 /// Executor state machine.
@@ -479,8 +482,28 @@ impl Render for ExecutorApp {
     }
 }
 
+/// Consume the inherited stdin pipe as the job password. The launcher
+/// writes the secret and closes its end, so `read_to_end` returns at EOF.
+/// Only trailing newlines are trimmed so `echo pw | bit7z-executor …`
+/// works for manual use.
+fn read_password_stdin() -> Option<String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    match std::io::stdin().read_to_end(&mut buf) {
+        Ok(_) if !buf.is_empty() => {
+            Some(String::from_utf8_lossy(&buf).trim_end_matches(['\r', '\n']).to_string())
+        }
+        _ => None,
+    }
+}
+
 fn main() {
     let args = Args::parse();
+    let password = if args.password_stdin {
+        read_password_stdin()
+    } else {
+        None
+    };
     let platform = gpui_platform::current_platform(false);
     let app = gpui::Application::new_inaccessible(platform);
 
@@ -492,7 +515,7 @@ fn main() {
             cx,
         );
         let job = args.job.clone();
-        let password = args.password.clone();
+        let password = password.clone();
         cx.open_window(
             gpui::WindowOptions {
                 titlebar: Some(gpui::TitlebarOptions {

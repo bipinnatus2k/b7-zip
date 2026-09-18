@@ -2,8 +2,10 @@
 //! the CLI, the manager, and the executor.
 //!
 //! **Passwords are never part of a job file**: specs carry only a
-//! `password_hint` flag; the actual secret is supplied out-of-band (dialog,
-//! environment, command line) via [`crate::run`].
+//! `password_hint` flag; the actual secret is supplied out-of-band via
+//! [`crate::run`] — an interactive dialog or an inherited stdin pipe. It
+//! must not travel on a process command line: argv is readable by any
+//! same-user process (e.g. via `Win32_Process`).
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
