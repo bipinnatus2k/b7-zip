@@ -1,28 +1,67 @@
-use gpui::{div, AnyElement, Styled, ParentElement, IntoElement, App, SharedString};
+use gpui::{div, AnyElement, Styled, ParentElement, IntoElement, App, AppContext, SharedString};
 use gpui_kit::component::dock::{panel_handle, register_panel};
 use gpui_kit::component::{Icon, IconName, Sizable};
-use crate::panels::editor::{ExplorerPanel, PANEL_EXPLORER};
-use crate::panels::sidebar::SidebarPanel;
-pub(crate) use crate::panels::welcome::WelcomePanel;
+use std::sync::Arc;
+use crate::archive_workspace::ArchiveWorkspace;
+use crate::diff_panel::{self, DiffPanel};
+use crate::settings_panel::SettingsPanel;
+pub(crate) use crate::panels::sidebar::SidebarPanel;
 
-pub mod editor;
-pub mod welcome;
 pub mod sidebar;
 
-/// Register every panel of this example, so `DockArea::load` can rebuild a
+/// Register every panel of this crate, so `DockArea::load` can rebuild a
 /// saved layout by looking `panel_name` up in this registry.
 pub(crate) fn register_panels(cx: &mut App) {
-    register_panel(cx, PANEL_EXPLORER, |_, window, cx| {
-        panel_handle(ExplorerPanel::new_tab(cx))
+    register_panel(cx, "explorer", |_, _, cx| {
+        panel_handle(cx.new(|cx| ArchiveWorkspace::home(cx)))
+    });
+    // A restored diff tab has no snapshot to show; an empty panel reads
+    // better than dropping the layout.
+    register_panel(cx, "diff", |_, _, cx| {
+        panel_handle(cx.new(|cx| {
+            DiffPanel::new(
+                "Diff",
+                compare::DiffReport::default(),
+                Arc::new(diff_panel::EmptyProvider),
+                cx,
+            )
+        }))
+    });
+    // A restored progress page has no live job behind it; an empty finished
+    // card reads better than dropping the layout.
+    register_panel(cx, "progress", |_, _, cx| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(task::TaskEvent::Finished {
+            success: true,
+            message: String::new(),
+        });
+        panel_handle(cx.new(|cx| {
+            crate::progress_panel::ProgressPanel::new(
+                "Progress",
+                rx,
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                cx,
+            )
+        }))
+    });
+    // Developer tools: debug builds only. Release layouts that carried the
+    // panel fall back to the registry miss path instead of showing dev UI.
+    #[cfg(debug_assertions)]
+    register_panel(cx, "devtools", |_, _, cx| {
+        panel_handle(cx.new(|cx| crate::devtools_panel::DevToolsPanel::new(cx)))
+    });
+    register_panel(cx, "settings", |_, window, cx| {
+        panel_handle(cx.new(|cx| crate::settings_panel::SettingsPanel::new(window, cx)))
     });
     register_panel(cx, "FilesPanel", |_, _, cx| {
         panel_handle(SidebarPanel::files(cx))
     });
     register_panel(cx, "OutlinePanel", |_, _, cx| {
-        panel_handle(ListPanel::outline(cx))
+        panel_handle(SidebarPanel::outline(cx))
     });
     register_panel(cx, "OutputPanel", |_, _, cx| {
-        panel_handle(OutputPanel::new(cx))
+        panel_handle(SidebarPanel::output(cx))
     });
 }
 

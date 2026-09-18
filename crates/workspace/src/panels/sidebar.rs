@@ -1,7 +1,7 @@
-use gpui::{div, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, Window, Styled, ParentElement, AnyElement, Entity, AppContext, InteractiveElement, SharedString, StatefulInteractiveElement};
+use gpui::{div, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render, Window, Styled, ParentElement, Entity, AppContext, InteractiveElement, SharedString, StatefulInteractiveElement};
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel};
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable};
+use gpui_kit::component::{ActiveTheme, IconName};
 use crate::panels::panel_title;
 
 
@@ -48,6 +48,16 @@ impl SidebarPanel {
         )
     }
 
+    pub(crate) fn output(cx: &mut App) -> Entity<Self> {
+        Self::build(
+            "OutputPanel",
+            "Output",
+            IconName::SquareTerminal,
+            Vec::new(),
+            cx,
+        )
+    }
+
     fn build(
         name: &'static str,
         title: &'static str,
@@ -73,7 +83,7 @@ impl BasePanel for SidebarPanel {
 
 impl Panel for SidebarPanel {
     fn title(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        panel_title(self.icon.clone(), self.title)
+        panel_title(self.icon.clone(), SharedString::from(self.title))
     }
 }
 

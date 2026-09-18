@@ -226,9 +226,7 @@ impl TabGroupRenderer for TabBarGroupRenderer {
                                     .on_click({
                                         let group = group.clone();
                                         move |_, window, cx| {
-                                            if needs_close_confirm(panel_name) {
-                                                confirm_close(&group, vec![panel_id], window, cx);
-                                            } else {
+                                            if !close_workspace_tab(&group, panel_id, window, cx) {
                                                 group.close(panel_id, window, cx);
                                             }
                                         }
@@ -245,7 +243,7 @@ impl TabGroupRenderer for TabBarGroupRenderer {
                     .context_menu({
                         let group = group.clone();
                         move |menu, _, cx| {
-                            tab_menu(menu, &group, ix, panel_id, panel_name, tab_closable, cx)
+                            tab_menu(menu, &group, ix, panel_id, tab_closable, cx)
                         }
                     })
                     .child(tab)
@@ -345,16 +343,75 @@ fn tab_title(panel: &Arc<dyn BasePanelView>, window: &mut Window, cx: &mut App) 
     }
 }
 
-/// Panels whose tab asks before it closes. The demo keys the policy off the
-/// panel name — the editor may hold unsaved text. A real app would move the
-/// decision onto the panel itself (e.g. a dirty flag).
-fn needs_close_confirm(panel_name: &str) -> bool {
-    panel_name == "EditorPanel"
+/// Whether the panel behind `panel_id` is a workspace with uncommitted
+/// changes. Workspaces register themselves in the [`WorkspaceRegistry`], so
+/// the renderer never needs to downcast views.
+fn panel_is_dirty(panel_id: PanelId, cx: &App) -> bool {
+    cx.try_global::<crate::globals::WorkspaceRegistry>()
+        .and_then(|registry| registry.get(panel_id.as_u64()))
+        .and_then(|workspace| workspace.upgrade())
+        .is_some_and(|workspace| workspace.read(cx).is_dirty())
 }
 
-/// Ask before closing, then close on confirm. The prompt answers
-/// asynchronously, so the actual close runs from the window handle once the
-/// user confirms; a closed window just drops the close.
+/// Routes a close request for a workspace-backed tab. When the workspace has
+/// uncommitted changes this asks Commit / Discard / Cancel and handles the
+/// whole flow; returns true in that case so the caller skips its own close.
+/// Clean (or non-workspace) panels return false and close directly; temp
+/// state is reclaimed later by `MultiWorkspace::prune`.
+fn close_workspace_tab(
+    group: &TabGroupContext,
+    panel_id: PanelId,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let workspace = cx
+        .try_global::<crate::globals::WorkspaceRegistry>()
+        .and_then(|registry| registry.get(panel_id.as_u64()))
+        .and_then(|workspace| workspace.upgrade());
+    let Some(workspace) = workspace else {
+        return false;
+    };
+    if !workspace.read(cx).is_dirty() {
+        return false;
+    }
+
+    let handle = window.window_handle();
+    let group = group.clone();
+    let weak = workspace.downgrade();
+    let answer = window.prompt(
+        PromptLevel::Info,
+        "This workspace has uncommitted changes.",
+        None,
+        &["Commit & Close", "Discard & Close", "Cancel"],
+        cx,
+    );
+    cx.spawn(async move |cx| {
+        match answer.await.unwrap_or(2) {
+            0 => {
+                let commit = weak
+                    .update(cx, |workspace, cx| Some(workspace.commit(cx)))
+                    .ok()
+                    .flatten();
+                if let Some(commit) = commit {
+                    let _ = commit.await;
+                }
+                let _ = handle.update(cx, |_, window, cx| group.close(panel_id, window, cx));
+            }
+            1 => {
+                let _ = weak.update(cx, |workspace, cx| workspace.discard(cx));
+                let _ = handle.update(cx, |_, window, cx| group.close(panel_id, window, cx));
+            }
+            _ => {}
+        }
+    })
+    .detach();
+    true
+}
+
+/// Ask before closing a batch that touches dirty panels, then close on
+/// confirm. The prompt answers asynchronously, so the actual close runs from
+/// the window handle once the user confirms; a closed window just drops the
+/// close.
 fn confirm_close(
     group: &TabGroupContext,
     panel_ids: Vec<PanelId>,
@@ -365,37 +422,32 @@ fn confirm_close(
     let handle = window.window_handle();
     let message = if panel_ids.len() > 1 {
         format!(
-            "Close {} tabs? Unsaved changes will be lost.",
+            "Close {} tabs? Uncommitted changes will be lost.",
             panel_ids.len()
         )
     } else {
-        "Close this tab? Unsaved changes will be lost.".to_string()
+        "Close this tab? Uncommitted changes will be lost.".to_string()
     };
     let answer = window.prompt(PromptLevel::Info, &message, None, &["Close", "Cancel"], cx);
-    println!("confirm_close: prompt shown, waiting for answer");
     cx.spawn(async move |cx| {
         if answer.await == Ok(0) {
-            println!("confirm_close: confirmed, closing");
             let _ = handle.update(cx, |_, window, cx| {
                 for panel_id in panel_ids {
                     group.close(panel_id, window, cx);
                 }
             });
-        } else {
-            println!("confirm_close: cancelled or dismissed");
         }
     })
     .detach();
 }
 
 /// The right-click menu of one tab: close it, its neighbours, or the group.
-/// Any batch that touches a confirm-on-close panel asks once for the batch.
+/// Any batch that touches a dirty workspace asks once for the batch.
 fn tab_menu(
     mut menu: PopupMenu,
     group: &TabGroupContext,
     ix: usize,
     panel_id: PanelId,
-    panel_name: &'static str,
     closable: bool,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
@@ -416,16 +468,14 @@ fn tab_menu(
     menu = menu.item(PopupMenuItem::new("Close").disabled(!closable).on_click({
         let group = group.clone();
         move |_, window, cx| {
-            if needs_close_confirm(panel_name) {
-                confirm_close(&group, vec![panel_id], window, cx);
-            } else {
+            if !close_workspace_tab(&group, panel_id, window, cx) {
                 group.close(panel_id, window, cx);
             }
         }
     }));
     if !other_ids.is_empty() {
         let asks = group.panels().iter().any(|panel| {
-            other_ids.contains(&panel.panel_id(cx)) && needs_close_confirm(panel.panel_name(cx))
+            other_ids.contains(&panel.panel_id(cx)) && panel_is_dirty(panel.panel_id(cx), cx)
         });
         menu = menu.item(PopupMenuItem::new("Close Other Tabs").on_click({
             let group = group.clone();
@@ -442,7 +492,7 @@ fn tab_menu(
     }
     if !all_ids.is_empty() {
         let asks = group.panels().iter().any(|panel| {
-            all_ids.contains(&panel.panel_id(cx)) && needs_close_confirm(panel.panel_name(cx))
+            all_ids.contains(&panel.panel_id(cx)) && panel_is_dirty(panel.panel_id(cx), cx)
         });
         menu = menu.item(PopupMenuItem::new("Close All Tabs").on_click({
             let group = group.clone();
