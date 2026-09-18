@@ -93,6 +93,11 @@ fn acknowledge(info_path: &Path) {
 /// Builds a Sentry v7 envelope: one header line, one item header, the event.
 fn envelope(info: &CrashInfo, app_version: &str, release_channel: &str) -> String {
     let event_id = uuid_v4();
+    // Scrub every string field of the report: panic messages and abort
+    // strings routinely embed absolute paths (the user's home dir → login
+    // name), and those must not leave the machine via a third-party host.
+    let mut crash = serde_json::to_value(info).unwrap_or(serde_json::Value::Null);
+    scrub_value(&mut crash);
     let event = serde_json::json!({
         "event_id": event_id.replace('-', ""),
         "timestamp": iso_timestamp(),
@@ -100,8 +105,8 @@ fn envelope(info: &CrashInfo, app_version: &str, release_channel: &str) -> Strin
         "level": "error",
         "environment": release_channel,
         "release": format!("bit7zfm@{app_version}"),
-        "message": {"formatted": describe(info)},
-        "extra": {"crash": info},
+        "message": {"formatted": scrub(&describe(info))},
+        "extra": {"crash": crash},
     });
     let event_json = serde_json::to_string(&event).unwrap_or_default();
     format!(
@@ -110,6 +115,58 @@ fn envelope(info: &CrashInfo, app_version: &str, release_channel: &str) -> Strin
         event_json.len(),
         event_json
     )
+}
+
+/// Redacts the user-specific segment of home-directory paths so a report
+/// cannot leak the login name. Handles the Windows `C:\Users\<name>` and
+/// POSIX `/home/<name>` / `/Users/<name>` shapes; anything after the user
+/// component is kept (it is app data, not identity), as are drive letters.
+fn scrub(text: &str) -> String {
+    let mut out = text.to_string();
+    for prefix in ["C:\\Users\\", "/home/", "/Users/"] {
+        let lower_needle = prefix.to_lowercase();
+        let mut search_from = 0;
+        while let Some(rel) = find_case_insensitive(&out[search_from..], &lower_needle) {
+            let at = search_from + rel + prefix.len();
+            if at >= out.len() {
+                break;
+            }
+            let boundary = out[at..]
+                .char_indices()
+                .find(|(_, c)| *c == '\\' || *c == '/' || *c == '"')
+                .map(|(i, _)| at + i)
+                .unwrap_or(out.len());
+            out.replace_range(at..boundary, "<user>");
+            search_from = at + "<user>".len();
+        }
+    }
+    out
+}
+
+/// Recursively applies [`scrub`] to every string in a JSON value.
+fn scrub_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(text) => *text = scrub(text),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(scrub_value),
+        serde_json::Value::Object(map) => map.values_mut().for_each(scrub_value),
+        _ => {}
+    }
+}
+
+/// Case-insensitive `needle` (already lowercase) search returning the byte
+/// index of the first match, so `C:\Users` / `c:\users` both hit.
+fn find_case_insensitive(haystack: &str, needle_lower: &str) -> Option<usize> {
+    let bytes = haystack.as_bytes();
+    let needle = needle_lower.as_bytes();
+    if needle.is_empty() || bytes.len() < needle.len() {
+        return None;
+    }
+    (0..=(bytes.len() - needle.len())).find(|&i| {
+        bytes[i..i + needle.len()]
+            .iter()
+            .zip(needle)
+            .all(|(h, n)| h.to_ascii_lowercase() == *n)
+    })
 }
 
 fn describe(info: &CrashInfo) -> String {
@@ -189,5 +246,43 @@ mod tests {
         assert!(envelope.contains("\"type\":\"event\""));
         assert!(envelope.contains("bit7zfm@0.1.0"));
         assert!(envelope.contains("panic:"));
+    }
+
+    #[test]
+    fn scrub_redacts_home_user_segment() {
+        assert_eq!(
+            scrub(r#"failed to open C:\Users\alice\archive.7z"#),
+            r#"failed to open C:\Users\<user>\archive.7z"#
+        );
+        // Case-insensitive on Windows drive paths.
+        assert_eq!(
+            scrub(r"C:\users\Bob\x"),
+            r"C:\users\<user>\x"
+        );
+        // POSIX homes, and a bare path that ends at the username.
+        assert_eq!(scrub("/home/carol/file.txt"), "/home/<user>/file.txt");
+        assert_eq!(scrub("no paths here"), "no paths here");
+        // The redacted report must not carry the real login name.
+        let info = CrashInfo {
+            init: crate::InitCrashHandler {
+                session_id: "1".into(),
+                zed_version: "0.1.0".into(),
+                binary: "bit7zfm".into(),
+                release_channel: "Dev".into(),
+                commit_sha: "x".into(),
+            },
+            panic: Some(crate::CrashPanic {
+                message: r"missing C:\Users\alice\secret.7z".into(),
+                span: "main.rs:1".into(),
+            }),
+            minidump_error: None,
+            abort_message: None,
+            gpus: Vec::new(),
+            active_gpu: None,
+            user_info: None,
+        };
+        let envelope = envelope(&info, "0.1.0", "Dev");
+        assert!(!envelope.contains("alice"), "login name must be scrubbed");
+        assert!(envelope.contains("<user>"));
     }
 }
