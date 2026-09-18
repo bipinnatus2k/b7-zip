@@ -80,6 +80,15 @@ struct AutoRenameCtx {
     indices: Vec<u32>,
 }
 
+/// Run fallible user code invoked from inside an `extern "C"` callback,
+/// converting a Rust panic into `on_panic`. No panic may cross the
+/// `extern "C"` boundary: the C++ `catch (...)` in the bridge cannot
+/// intercept Rust unwinding, so it aborts the process. Every trampoline
+/// funnels user closures (and closure-adjacent logic) through this guard.
+fn ffi_callback_guard<T>(f: impl FnOnce() -> T, on_panic: T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(on_panic)
+}
+
 /// on_progress: return 0 to cancel, non-zero to continue.
 unsafe extern "C" fn progress_trampoline(
     processed: u64,
@@ -110,7 +119,19 @@ unsafe extern "C" fn progress_trampoline(
         }
     }
     if let Some(progress) = &ctx.progress {
-        progress(processed, total);
+        // A panicking progress callback must not unwind into C++, and must
+        // not let the operation silently "succeed" with truncated work:
+        // surface it as a cancellation so the caller sees a failed op.
+        let ok = ffi_callback_guard(|| {
+            progress(processed, total);
+            true
+        }, false);
+        if !ok {
+            if let Some(cancel) = &ctx.cancel {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            return 0;
+        }
     }
     1
 }
@@ -127,7 +148,9 @@ unsafe extern "C" fn file_trampoline_reader(
     let ctx = unsafe { &*(ctx as *const CallbackCtx) };
     if let Some(file) = &ctx.file {
         let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-        file(&path);
+        // Per-file reporting is advisory: a panic here is swallowed rather
+        // than allowed to unwind into C++ (or cancelled mid-operation).
+        ffi_callback_guard(|| file(&path), ());
     }
 }
 
@@ -142,7 +165,9 @@ unsafe extern "C" fn file_trampoline_writer(
     let ctx = unsafe { &*(ctx as *const CallbackCtx) };
     if let Some(file) = &ctx.file {
         let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-        file(&path);
+        // Per-file reporting is advisory: a panic here is swallowed rather
+        // than allowed to unwind into C++ (or cancelled mid-operation).
+        ffi_callback_guard(|| file(&path), ());
     }
 }
 
@@ -180,7 +205,10 @@ unsafe extern "C" fn overwrite_ask_trampoline(
         return 1;
     }
     let dest = unsafe { CStr::from_ptr(dest) }.to_string_lossy();
-    if conflict(&dest) { 0 } else { 1 }
+    // A panicking conflict callback defaults to *skip*: never overwrite a
+    // file the UI failed to ask about.
+    let overwrite = ffi_callback_guard(|| conflict(&dest), false);
+    if overwrite { 0 } else { 1 }
 }
 
 /// RenameCallback used for `AutoRename`: skip items outside `indices`, keep
@@ -211,27 +239,37 @@ unsafe extern "C" fn auto_rename_trampoline(
         return 0;
     }
     let src = unsafe { CStr::from_ptr(src) }.to_string_lossy();
-    let mut candidate = auto
-        .dest
-        .join(sanitize_archive_relative(Path::new(src.as_ref())));
-    let original = candidate.clone();
-    let mut counter = 1u32;
-    while candidate.exists() && counter < 100_000 {
-        let stem = original
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("archive");
-        let ext = original.extension().and_then(|s| s.to_str());
-        let name = match ext {
-            Some(ext) => format!("{stem} ({counter}).{ext}"),
-            None => format!("{stem} ({counter})"),
-        };
-        candidate = original.with_file_name(name);
-        counter += 1;
-    }
-    let text = match candidate.strip_prefix(&auto.dest) {
-        Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-        Err(_) => candidate.to_string_lossy().replace('\\', "/"),
+    // The rename computation touches the filesystem and formats paths; a
+    // panic must fail the item (-1) instead of unwinding into C++.
+    let text = match ffi_callback_guard(
+        || -> Option<String> {
+            let mut candidate = auto
+                .dest
+                .join(sanitize_archive_relative(Path::new(src.as_ref())));
+            let original = candidate.clone();
+            let mut counter = 1u32;
+            while candidate.exists() && counter < 100_000 {
+                let stem = original
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("archive");
+                let ext = original.extension().and_then(|s| s.to_str());
+                let name = match ext {
+                    Some(ext) => format!("{stem} ({counter}).{ext}"),
+                    None => format!("{stem} ({counter})"),
+                };
+                candidate = original.with_file_name(name);
+                counter += 1;
+            }
+            Some(match candidate.strip_prefix(&auto.dest) {
+                Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+                Err(_) => candidate.to_string_lossy().replace('\\', "/"),
+            })
+        },
+        None,
+    ) {
+        Some(text) => text,
+        None => return -1,
     };
     let bytes = text.as_bytes();
     if bytes.len() + 1 > out_size as usize {
