@@ -1,4 +1,5 @@
 use gpui::{prelude::*, svg, Action, AnyElement, Hsla, MouseButton, Window, WindowButton, MAX_BUTTONS_PER_SIDE, App, ElementId, div, hsla};
+use gpui_kit::component::{IconName, IconNamed};
 use ui::components::stack::h_flex;
 use ui::styles::system;
 
@@ -95,7 +96,7 @@ impl WindowControlType {
     pub fn icon(&self) -> IconName {
         match self {
             WindowControlType::Minimize => IconName::Minimize,
-            WindowControlType::Restore => IconName::SquareStack,
+            WindowControlType::Restore => IconName::WindowRestore,
             WindowControlType::Maximize => IconName::Maximize,
             WindowControlType::Close => IconName::Close,
         }
