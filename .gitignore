@@ -26,3 +26,9 @@ skills-lock.json
 
 # Local security-scan state
 /.mimosa/
+
+# Local ZCode session state
+/.zcode/
+
+# Standalone build lockfile of the vendored gpui-router (not a workspace member)
+/crates/thirdparties/gpui-router/Cargo.lock
