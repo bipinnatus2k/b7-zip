@@ -78,6 +78,7 @@ fn run(
             to,
             format,
             password,
+            encrypt_headers,
         } => {
             let target = to.map(PathBuf::from).unwrap_or_else(|| {
                 let first = files.first().cloned().unwrap_or_else(|| "archive".into());
@@ -103,7 +104,7 @@ fn run(
                 solid: None,
                 volume: None,
                 threads: None,
-                encrypt_headers: false,
+                encrypt_headers: encrypt_headers,
                 password_hint: password.is_some(),
             };
             run_job_or_launch(job, password, runner, gui)

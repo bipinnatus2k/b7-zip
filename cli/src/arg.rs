@@ -55,6 +55,9 @@ pub enum Commands {
         format: String,
         #[arg(long)]
         password: Option<String>,
+        /// Encrypt also the file names (7z only, like 7-Zip's -mhe).
+        #[arg(long)]
+        encrypt_headers: bool,
     },
     Preview {
         path: String,
