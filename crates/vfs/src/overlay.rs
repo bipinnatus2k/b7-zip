@@ -145,6 +145,21 @@ impl Overlay {
             .collect()
     }
 
+    /// The commit-ready changeset over the whole dirty set.
+    pub fn changeset(&self) -> Changeset {
+        crate::diff::build_changeset(&self.base, &self.working, &self.dirty)
+    }
+
+    /// The changeset over the staged subset only.
+    pub fn staged_changeset(&self) -> Changeset {
+        crate::diff::build_changeset(&self.base, &self.working, &self.staged_view())
+    }
+
+    /// The changeset over the unstaged subset only.
+    pub fn unstaged_changeset(&self) -> Changeset {
+        crate::diff::build_changeset(&self.base, &self.working, &self.unstaged_view())
+    }
+
     /// Applies a successfully committed changeset to the base tree only,
     /// then drops the committed nodes' dirty and staged entries. The working
     /// tree and unstaged entries are untouched — an unstaged delete keeps

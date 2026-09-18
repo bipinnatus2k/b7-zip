@@ -210,11 +210,7 @@ impl ArchiveSession {
 
     /// The current commit-ready changeset (diff of dirty nodes vs base).
     pub fn changeset(&self) -> Changeset {
-        vfs::diff::build_changeset(
-            self.overlay.base(),
-            self.overlay.working(),
-            self.overlay.dirty(),
-        )
+        self.overlay.changeset()
     }
 
     /// Whether the session has unsaved changes.
@@ -224,16 +220,29 @@ impl ArchiveSession {
 
     /// Commit the current changeset back to the archive.
     pub fn commit(&mut self) -> Result<(), SessionError> {
-        let changeset = self.changeset();
-        if changeset.is_empty() {
+        let changeset = self.overlay.changeset();
+        // A full commit folds the whole working tree into the base.
+        self.commit_changeset(&changeset, |overlay| overlay.on_commit_success())
+    }
+
+    /// Shared commit core: map the changeset to engine ops, rewrite the
+    /// archive, fold it into the overlay via `fold`, then refresh indices.
+    /// `fold` differs between a full commit (`on_commit_success`) and a
+    /// partial one (`apply_committed`); everything else is identical.
+    fn commit_changeset(
+        &mut self,
+        committed: &Changeset,
+        fold: impl FnOnce(&mut Overlay),
+    ) -> Result<(), SessionError> {
+        if committed.is_empty() {
             // Dirty entries that cannot be mapped to archive operations
             // (e.g. a modified synthetic directory) must not leave the
             // session permanently dirty.
-            self.overlay.on_commit_success();
+            fold(&mut self.overlay);
             self.retry_index_refresh_if_stale()?;
             return Ok(());
         }
-        let ops = task::changeset_to_ops(&changeset);
+        let ops = task::changeset_to_ops(committed);
         if let Err(err) = self
             .engine
             .update(&self.archive_path, &ops, self.password.as_ref())
@@ -243,7 +252,7 @@ impl ArchiveSession {
             self.stale_indices = true;
             return Err(SessionError::Archive(err));
         }
-        self.overlay.on_commit_success();
+        fold(&mut self.overlay);
         self.refresh_archive_indices()?;
         Ok(())
     }
@@ -326,45 +335,18 @@ impl ArchiveSession {
     }
 
     pub fn staged_changeset(&self) -> Changeset {
-        vfs::diff::build_changeset(
-            self.overlay.base(),
-            self.overlay.working(),
-            &self.overlay.staged_view(),
-        )
+        self.overlay.staged_changeset()
     }
 
     pub fn unstaged_changeset(&self) -> Changeset {
-        vfs::diff::build_changeset(
-            self.overlay.base(),
-            self.overlay.working(),
-            &self.overlay.unstaged_view(),
-        )
+        self.overlay.unstaged_changeset()
     }
 
     /// Commits only the staged subset and folds the committed ops into the
     /// base tree; unstaged entries stay dirty for a later commit.
     pub fn commit_staged(&mut self) -> Result<Changeset, SessionError> {
-        let committed = self.staged_changeset();
-        if committed.is_empty() {
-            // Staged entries that cannot be mapped to archive operations
-            // (e.g. a modified synthetic directory) are dropped instead of
-            // lingering.
-            self.overlay.apply_committed(&committed);
-            self.retry_index_refresh_if_stale()?;
-            return Ok(committed);
-        }
-        let ops = task::changeset_to_ops(&committed);
-        if let Err(err) = self
-            .engine
-            .update(&self.archive_path, &ops, self.password.as_ref())
-        {
-            // A failed rewrite may still have altered the archive; refuse
-            // to trust pending op indices until a re-list succeeds.
-            self.stale_indices = true;
-            return Err(SessionError::Archive(err));
-        }
-        self.overlay.apply_committed(&committed);
-        self.refresh_archive_indices()?;
+        let committed = self.overlay.staged_changeset();
+        self.commit_changeset(&committed, |overlay| overlay.apply_committed(&committed))?;
         Ok(committed)
     }
 
