@@ -18,7 +18,19 @@ use fs_watcher::{FsEvent, FsEventKind, FsWatcher, WatchConfig};
 use password::Password;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use vfs::{Changeset, Overlay};
+use vfs::{Changeset, DirtyState, NodeId, Overlay};
+
+/// One row of the staging (changes) view: a dirty node with its path and
+/// whether it takes part in the next commit.
+#[derive(Debug, Clone)]
+pub struct ChangeEntry {
+    pub id: NodeId,
+    /// Archive-relative path (forward slashes). For deleted nodes the base
+    /// path, for everything else the working path.
+    pub path: String,
+    pub state: DirtyState,
+    pub staged: bool,
+}
 
 /// A live archive editing session.
 pub struct ArchiveSession {
@@ -85,6 +97,18 @@ impl ArchiveSession {
     /// The temp working directory for this session.
     pub fn work_dir(&self) -> &Path {
         &self.work_dir
+    }
+
+    /// The session password, if one was supplied at open time.
+    pub fn password(&self) -> Option<&Password> {
+        self.password.as_ref()
+    }
+
+    /// Sets (or clears) the password used for extraction and writes. Used
+    /// when a content-encrypted archive was opened without one and the user
+    /// supplies it afterwards.
+    pub fn set_password(&mut self, password: Option<Password>) {
+        self.password = password;
     }
 
     /// Lazily extract the entry at `archive_index` into the working
@@ -207,6 +231,108 @@ impl ArchiveSession {
             .update(&self.archive_path, &ops, self.password.as_ref())?;
         self.overlay.on_commit_success();
         Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Staging: Git-style partial commits over the dirty set.
+    // ------------------------------------------------------------------
+
+    pub fn stage(&mut self, ids: impl IntoIterator<Item = NodeId>) {
+        self.overlay.stage(ids);
+    }
+
+    pub fn unstage(&mut self, ids: impl IntoIterator<Item = NodeId>) {
+        self.overlay.unstage(ids);
+    }
+
+    pub fn stage_all(&mut self) {
+        self.overlay.stage_all();
+    }
+
+    pub fn unstage_all(&mut self) {
+        self.overlay.unstage_all();
+    }
+
+    /// The staging view rows, sorted by path.
+    pub fn changes(&self) -> Vec<ChangeEntry> {
+        let mut rows: Vec<ChangeEntry> = self
+            .overlay
+            .dirty()
+            .iter()
+            .map(|(id, state)| ChangeEntry {
+                id: *id,
+                path: self
+                    .overlay
+                    .working()
+                    .path_of(*id)
+                    .or_else(|| self.overlay.base().path_of(*id))
+                    .unwrap_or_default(),
+                state: *state,
+                staged: self.overlay.is_staged(*id),
+            })
+            .collect();
+        rows.sort_by(|a, b| a.path.cmp(&b.path));
+        rows
+    }
+
+    pub fn staged_changeset(&self) -> Changeset {
+        vfs::diff::build_changeset(
+            self.overlay.base(),
+            self.overlay.working(),
+            &self.overlay.staged_view(),
+        )
+    }
+
+    pub fn unstaged_changeset(&self) -> Changeset {
+        vfs::diff::build_changeset(
+            self.overlay.base(),
+            self.overlay.working(),
+            &self.overlay.unstaged_view(),
+        )
+    }
+
+    /// Commits only the staged subset and folds the committed ops into the
+    /// base tree; unstaged entries stay dirty for a later commit.
+    pub fn commit_staged(&mut self) -> Result<Changeset, SessionError> {
+        let committed = self.staged_changeset();
+        if committed.is_empty() {
+            // Staged entries that cannot be mapped to archive operations
+            // (e.g. a modified synthetic directory) are dropped instead of
+            // lingering.
+            self.overlay.apply_committed(&committed);
+            return Ok(committed);
+        }
+        let ops = task::changeset_to_ops(&committed);
+        self.engine
+            .update(&self.archive_path, &ops, self.password.as_ref())?;
+        self.overlay.apply_committed(&committed);
+        Ok(committed)
+    }
+
+    /// Reverts every unstaged change in the working view. The work directory
+    /// on disk is not rewritten (matching [`Self::discard`]); a later watcher
+    /// event may re-report files that still differ from base.
+    pub fn discard_unstaged(&mut self) {
+        self.overlay.discard_unstaged();
+    }
+
+    /// Copies an external file into the working directory at `rel_path`
+    /// (forward slashes, archive-relative) and syncs it into the overlay as
+    /// an unstaged addition/modification. Shared by the Add toolbar flow and
+    /// external file drops.
+    pub fn ingest_file(&mut self, src: &Path, rel_path: &str) -> Result<PathBuf, String> {
+        let target = self
+            .work_dir
+            .join(temp::sanitize_relative(Path::new(rel_path)));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::copy(src, &target).map_err(|e| e.to_string())?;
+        self.apply_event(&FsEvent {
+            kind: FsEventKind::Create,
+            path: target.clone(),
+        });
+        Ok(target)
     }
 
     /// Discard pending edits (revert overlay to base).
