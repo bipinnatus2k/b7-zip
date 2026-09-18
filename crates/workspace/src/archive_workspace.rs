@@ -790,19 +790,13 @@ impl ArchiveWorkspace {
         if indices.is_empty() {
             return;
         }
-        let engine = globals::engine(cx);
-        let archive_path = session
-            .lock()
-            .expect("session lock poisoned")
-            .archive_path()
-            .to_path_buf();
-        let session = session.clone();
-        let ops: Vec<bit7z_rs::EngineOp> = indices
-            .iter()
-            .map(|&index| bit7z_rs::EngineOp::Delete {
-                archive_index: index,
-            })
-            .collect();
+        let (archive_path, password) = {
+            let session = session.lock().expect("session lock poisoned");
+            (
+                session.archive_path().to_path_buf(),
+                session.password().cloned(),
+            )
+        };
         let weak = cx.weak_entity();
         let count = indices.len();
         cx.spawn(async move |_, cx| {
@@ -820,8 +814,16 @@ impl ArchiveWorkspace {
             if answer.await != Ok(0) {
                 return;
             }
-            let Some(engine) = engine else { return };
-            write_ops(weak, engine, session, ops, cx).await;
+            // Run the delete through the task pipeline (progress page, cancel,
+            // typed outcome) instead of a direct engine.write on this thread.
+            let _ = weak.update(cx, |this, cx| {
+                let spec = JobSpec::Delete {
+                    archive: archive_path,
+                    indices,
+                    password_hint: password.is_some(),
+                };
+                this.run_job(spec, password, cx);
+            });
         })
         .detach();
     }
@@ -842,9 +844,9 @@ impl ArchiveWorkspace {
     }
 
     fn rename_selected_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = &self.session else {
+        if self.session.is_none() {
             return;
-        };
+        }
         let Some(row) = self.explorer.read(cx).focused_row() else {
             self.status = Some("Select exactly one entry to rename".into());
             cx.notify();
@@ -862,8 +864,6 @@ impl ArchiveWorkspace {
             .map(|(parent, _)| parent.to_string());
 
         let weak = cx.weak_entity();
-        let engine = globals::engine(cx);
-        let session = session.clone();
         let dialog_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("New name")
@@ -871,8 +871,6 @@ impl ArchiveWorkspace {
         });
         window.open_dialog(cx, move |dialog, _, _| {
             let weak = weak.clone();
-            let engine = engine.clone();
-            let session = session.clone();
             let input = dialog_input.clone();
             let parent = parent.clone();
             let old_name = old_name.clone();
@@ -892,17 +890,30 @@ impl ArchiveWorkspace {
                     if new_path == old_name {
                         return true;
                     }
-                    let Some(engine) = engine.clone() else {
-                        return true;
-                    };
-                    let ops = vec![bit7z_rs::EngineOp::Rename {
-                        archive_index,
-                        new_path,
-                    }];
+                    // Apply the rename through the task pipeline (progress page,
+                    // cancel, typed outcome), then the reload runs on success.
                     let weak = weak.clone();
-                    let session = session.clone();
                     cx.spawn(async move |cx| {
-                        write_ops(weak, engine, session, ops, cx).await;
+                        let _ = weak.update(cx, |this, cx| {
+                            let Some(session) = this.session.clone() else {
+                                return;
+                            };
+                            let (archive, password) = {
+                                let session =
+                                    session.lock().expect("session lock poisoned");
+                                (
+                                    session.archive_path().to_path_buf(),
+                                    session.password().cloned(),
+                                )
+                            };
+                            let spec = JobSpec::Rename {
+                                archive,
+                                index: archive_index,
+                                new_path,
+                                password_hint: password.is_some(),
+                            };
+                            this.run_job(spec, password, cx);
+                        });
                     })
                     .detach();
                     true
@@ -1376,6 +1387,13 @@ impl ArchiveWorkspace {
         };
         let weak = cx.weak_entity();
         let password_was_supplied = password.is_some();
+        // In-place archive rewrites change the entry tree behind the
+        // overlay's back, so the session must reload before the view refresh;
+        // read-only jobs (extract/test/checksum) just re-poll the working dir.
+        let rewrites_archive = matches!(
+            &spec,
+            JobSpec::Delete { .. } | JobSpec::Rename { .. } | JobSpec::NewFolder { .. }
+        );
         // Open the progress page from a detached task: this method is often
         // called from a click listener, and the nested window update that a
         // synchronous `window_handle.update` performs there is rejected
@@ -1422,11 +1440,15 @@ impl ArchiveWorkspace {
                                         Some(job_result_message(success, message, error));
                                 }
                                 if success {
-                                    // Archive-rewriting jobs (add/delete) changed
-                                    // the entry tree behind the explorer's back.
-                                    this.refresh_dirty(cx);
-                                    this.explorer
-                                        .update(cx, |explorer, cx| explorer.refresh(cx));
+                                    if rewrites_archive {
+                                        // Re-read the rewritten archive so the
+                                        // overlay's base and indices reflect it.
+                                        this.reload_from_archive(cx);
+                                    } else {
+                                        this.refresh_dirty(cx);
+                                        this.explorer
+                                            .update(cx, |explorer, cx| explorer.refresh(cx));
+                                    }
                                 }
                                 cx.notify();
                             });
@@ -1435,6 +1457,34 @@ impl ArchiveWorkspace {
                     panel
                 });
                 globals::open_center_panel(cx, panel, window);
+            });
+        })
+        .detach();
+    }
+
+    /// Re-reads the archive into the session overlay after an in-place
+    /// rewrite (Delete/Rename/NewFolder ran on the archive file directly, so
+    /// the overlay's base tree and entry indices are now stale). The reload
+    /// runs on the background executor (it re-lists via the engine) and the
+    /// view refreshes on the main thread once it lands.
+    fn reload_from_archive(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    session
+                        .lock()
+                        .expect("session lock poisoned")
+                        .reload()
+                        .map_err(|err| err.to_string())
+                })
+                .await;
+            let _ = weak.update(cx, |this, cx| {
+                this.after_write(outcome, cx);
             });
         })
         .detach();
@@ -1828,40 +1878,6 @@ fn job_result_message(
             _ => format!("Failed: {message}").into(),
         }
     }
-}
-
-/// Applies engine ops to the archive in the background, reloads the session,
-/// and refreshes the workspace afterwards.
-async fn write_ops(
-    weak: WeakEntity<ArchiveWorkspace>,
-    engine: Arc<dyn bit7z_rs::ArchiveEngine>,
-    session: Arc<Mutex<ArchiveSession>>,
-    ops: Vec<bit7z_rs::EngineOp>,
-    cx: &mut gpui::AsyncApp,
-) {
-    let outcome = cx
-        .background_executor()
-        .spawn(async move {
-            let archive_path = session
-                .lock()
-                .expect("session lock poisoned")
-                .archive_path()
-                .to_path_buf();
-            let updated = engine.update(&archive_path, &ops, None);
-            let reloaded = {
-                let mut session = session.lock().expect("session lock poisoned");
-                session.reload()
-            };
-            (
-                updated.map_err(|err| err.to_string()),
-                reloaded.map_err(|err| err.to_string()),
-            )
-        })
-        .await;
-    let _ = weak.update(cx, |this, cx| match outcome {
-        (Ok(()), Ok(())) => this.after_write(Ok(()), cx),
-        (Err(err), _) | (_, Err(err)) => this.after_write(Err(err), cx),
-    });
 }
 
 /// Serves diff-panel content out of two open sessions: the Base side is the
