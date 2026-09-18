@@ -1,35 +1,42 @@
 //! Archive explorer view: the virtualized, multi-select file table and
-//! keyboard behavior, built on the pure `model` module.
+//! keyboard behavior. The rows live in a `Signal` that the `ui` crate's
+//! [`DataView`] observes (and repaints on every refresh), virtualized with a
+//! fill-the-parent body; the column budget comes from [`Responsive`], which
+//! measures the table's own container width, not the window. Sorting and
+//! multi-selection stay view behavior here: rows enter the signal already in
+//! display order, and the `DataView` stays a plain collection shell.
 
 use crate::model::{
-    EntryRow, Sort, SortColumn, SortDirection, apply_sort, attr_string, collect_indices,
-    crc_string, format_size, rows_for_path,
+    self, EntryRow, Sort, SortColumn, SortDirection, VisibleColumns, apply_sort, attr_string,
+    collect_indices, crc_string, format_size, rows_for_path,
 };
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext, ClickEvent, Context, Div, EventEmitter, ExternalPaths, FocusHandle,
+    App, AppContext, ClickEvent, Context, Div, Entity, EventEmitter, ExternalPaths, FocusHandle,
     Focusable, Hsla, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render,
     ScrollStrategy, SharedString, Stateful, StatefulInteractiveElement, Styled,
-    UniformListScrollHandle, WeakEntity, Window, div, hsla, px, uniform_list,
+    UniformListScrollHandle, WeakEntity, Window, div, hsla, px,
 };
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable};
+use reactive_signals::reactive::Signal;
 use session::ArchiveSession;
 use std::rc::Rc;
-use std::path::Path;
 use std::sync::{Arc, Mutex};
+use ui::components::Responsive;
+use ui::data::dataview::DataView;
 
 /// Row height of the file table; uniform so the list can virtualize.
 const ROW_HEIGHT: Pixels = px(24.0);
 
-/// Fixed column widths. Kept compact so the name column survives narrow
-/// docks; the name column takes whatever remains.
-const COL_SIZE: Pixels = px(76.0);
-const COL_PACKED: Pixels = px(76.0);
-const COL_MODIFIED: Pixels = px(118.0);
-const COL_ATTRIBUTES: Pixels = px(70.0);
-const COL_CRC: Pixels = px(74.0);
-const COL_METHOD: Pixels = px(60.0);
-const COL_NAME_MIN: Pixels = px(140.0);
+/// Fixed column widths, resolved from the model's budget constants so the
+/// header, the rows, and the responsive fit calculation never disagree.
+const COL_SIZE: Pixels = px(model::SIZE_WIDTH);
+const COL_PACKED: Pixels = px(model::PACKED_WIDTH);
+const COL_MODIFIED: Pixels = px(model::MODIFIED_WIDTH);
+const COL_ATTRIBUTES: Pixels = px(model::ATTRIBUTES_WIDTH);
+const COL_CRC: Pixels = px(model::CRC_WIDTH);
+const COL_METHOD: Pixels = px(model::METHOD_WIDTH);
+const COL_NAME_MIN: Pixels = px(model::NAME_MIN_WIDTH);
 
 /// Events forwarded to the host.
 #[derive(Debug, Clone)]
@@ -51,7 +58,15 @@ pub enum ExplorerCommand {
 pub struct ArchiveExplorer {
     session: Option<Arc<Mutex<ArchiveSession>>>,
     current_path: String,
-    rows: Vec<EntryRow>,
+    /// The table's data: rows already in display order. One source — the
+    /// `DataView` observes it, every accessor below reads it; the view never
+    /// keeps a second copy.
+    rows: Signal<Vec<EntryRow>>,
+    /// Column visibility, published from the measured container width during
+    /// render; the row templates read it when painting, so header and rows
+    /// agree within one frame.
+    cols: Signal<VisibleColumns>,
+    data_view: Entity<DataView<EntryRow>>,
     sort: Option<Sort>,
     /// Selected row indices, kept ascending.
     selection: Vec<usize>,
@@ -71,15 +86,47 @@ impl Focusable for ArchiveExplorer {
 
 impl ArchiveExplorer {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let rows: Signal<Vec<EntryRow>> = Signal::new(cx, Vec::new());
+        let cols = Signal::new(cx, VisibleColumns::MINIMAL);
+        let scroll_handle = UniformListScrollHandle::new();
+        let weak = cx.weak_entity();
+        let data_view = cx.new(|cx| {
+            DataView::new(cx, &rows)
+                .fill()
+                .track_scroll(&scroll_handle)
+                .empty(|_window, cx| {
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("No entries")
+                })
+                .item({
+                    // Selection is multi-select (ctrl/shift/extension), which
+                    // the shell's single-select model does not cover, so the
+                    // row owns its interaction: the template reads the live
+                    // selection here and handles the click below.
+                    let weak = weak.clone();
+                    let cols = cols.clone();
+                    move |row: &EntryRow, ix, _window, app| {
+                        let visible = *cols.read(app);
+                        let selected = weak.upgrade().is_some_and(|explorer| {
+                            explorer.read(app).selection.contains(&ix)
+                        });
+                        render_row(&weak, ix, row, selected, visible, app)
+                    }
+                })
+        });
         Self {
             session: None,
             current_path: String::new(),
-            rows: Vec::new(),
+            rows,
+            cols,
+            data_view,
             sort: None,
             selection: Vec::new(),
             anchor: None,
             focus_handle: cx.focus_handle(),
-            scroll_handle: UniformListScrollHandle::new(),
+            scroll_handle,
         }
     }
 
@@ -129,30 +176,31 @@ impl ArchiveExplorer {
         &self.current_path
     }
 
-    pub fn rows(&self) -> &[EntryRow] {
-        &self.rows
+    pub fn rows<'a>(&self, cx: &'a App) -> &'a [EntryRow] {
+        self.rows.read(cx).as_slice()
     }
 
-    pub fn selected_rows(&self) -> Vec<EntryRow> {
+    pub fn selected_rows(&self, cx: &App) -> Vec<EntryRow> {
         self.selection
             .iter()
-            .filter_map(|ix| self.rows.get(*ix).cloned())
+            .filter_map(|ix| self.rows.read(cx).get(*ix).cloned())
             .collect()
     }
 
     /// Archive entry indices the host should operate on: the recursive
     /// expansion of the selection, or of every visible row when the selection
     /// is empty (7zFM semantics).
-    pub fn target_indices(&self) -> Vec<u32> {
+    pub fn target_indices(&self, cx: &App) -> Vec<u32> {
         let Some(session) = &self.session else {
             return Vec::new();
         };
+        let rows = self.rows.read(cx);
         let selected: Vec<&EntryRow> = if self.selection.is_empty() {
-            self.rows.iter().collect()
+            rows.iter().collect()
         } else {
             self.selection
                 .iter()
-                .filter_map(|ix| self.rows.get(*ix))
+                .filter_map(|ix| rows.get(*ix))
                 .collect()
         };
         let session = session.lock().expect("session lock poisoned");
@@ -166,11 +214,11 @@ impl ArchiveExplorer {
         indices
     }
 
-    pub fn focused_row(&self) -> Option<EntryRow> {
+    pub fn focused_row(&self, cx: &App) -> Option<EntryRow> {
         if self.selection.len() != 1 {
             return None;
         }
-        self.rows.get(self.selection[0]).cloned()
+        self.rows.read(cx).get(self.selection[0]).cloned()
     }
 
     /// Copies dropped external files into the current directory as unstaged
@@ -220,24 +268,31 @@ impl ArchiveExplorer {
         .detach();
     }
 
+    /// Rebuilds the rows from the session (sorted into display order) and
+    /// publishes them: the `DataView` repaints off the signal, and the view
+    /// holds no second copy.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = &self.session {
-            self.rows = rows_for_path(session, &self.current_path);
-            if let Some(sort) = self.sort {
-                apply_sort(&mut self.rows, sort);
+        let next = match &self.session {
+            Some(session) => {
+                let mut rows = rows_for_path(session, &self.current_path);
+                if let Some(sort) = self.sort {
+                    apply_sort(&mut rows, sort);
+                }
+                rows
             }
-        } else {
-            self.rows.clear();
-        }
-        let len = self.rows.len();
+            None => Vec::new(),
+        };
+        let len = next.len();
         self.selection.retain(|ix| *ix < len);
+        self.anchor = self.anchor.filter(|ix| *ix < len);
+        self.rows.set(cx, next);
         cx.notify();
     }
 
     fn on_row_click(&mut self, ix: usize, event: &ClickEvent, cx: &mut Context<Self>) {
         let modifiers = event.modifiers();
         if event.click_count() >= 2 {
-            if let Some(row) = self.rows.get(ix).cloned() {
+            if let Some(row) = self.rows.read(cx).get(ix).cloned() {
                 if row.is_directory {
                     self.navigate(&row.path, cx);
                 } else {
@@ -272,13 +327,13 @@ impl ArchiveExplorer {
     }
 
     fn select_all(&mut self, cx: &mut Context<Self>) {
-        self.selection = (0..self.rows.len()).collect();
+        self.selection = (0..self.rows.read(cx).len()).collect();
         cx.emit(ExplorerEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
     }
 
     fn move_cursor(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
-        let len = self.rows.len() as isize;
+        let len = self.rows.read(cx).len() as isize;
         if len == 0 {
             return;
         }
@@ -296,6 +351,7 @@ impl ArchiveExplorer {
             self.selection = vec![next];
             self.anchor = Some(next);
         }
+        // The handle feeds the `DataView`'s internal uniform list (track_scroll).
         self.scroll_handle.scroll_to_item(next, ScrollStrategy::Top);
         cx.emit(ExplorerEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
@@ -313,7 +369,7 @@ impl ArchiveExplorer {
             "enter" => {
                 let active = self.selection.last().copied();
                 if let Some(ix) = active {
-                    if let Some(row) = self.rows.get(ix).cloned() {
+                    if let Some(row) = self.rows.read(cx).get(ix).cloned() {
                         if row.is_directory {
                             self.navigate(&row.path, cx);
                         } else {
@@ -346,29 +402,25 @@ impl Render for ArchiveExplorer {
             let theme = cx.theme();
             (theme.foreground, theme.muted_foreground, theme.border)
         };
-        let entity = cx.entity().clone();
-        let weak = entity.downgrade();
-        let row_count = self.rows.len();
-
         let on_sort: Rc<dyn Fn(&SortColumn, &mut Window, &mut App)> =
             Rc::new(cx.listener(|this, column: &SortColumn, _window, cx| {
                 this.set_sort(*column, cx);
             }));
-        let header = header_row(self.sort, muted, border, on_sort);
+        let sort = self.sort;
+        let cols = self.cols.clone();
+        let data_view = self.data_view.clone();
 
-        // Drag&drop: external file drops arrive as `FileDragPaths` drags (the
-        // platform layer translates them); rows with extracted content offer
-        // themselves back to the OS as native file drags.
-        let weak_for_drop = weak.clone();
+        // Drag&drop: external file drops arrive as `ExternalPaths` drags (the
+        // platform layer translates them); the whole view is the drop target.
         div()
             .id("archive-explorer")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(Self::on_key))
-            .drag_over::<gpui::ExternalPaths>(|el, _, _, cx| {
+            .drag_over::<ExternalPaths>(|el, _, _, cx| {
                 el.border_color(cx.theme().primary)
             })
             .on_drop(cx.listener(
-                move |this, paths: &gpui::ExternalPaths, _window, cx| {
+                move |this, paths: &ExternalPaths, _window, cx| {
                     this.ingest_dropped(paths.paths(), cx);
                 },
             ))
@@ -377,32 +429,24 @@ impl Render for ArchiveExplorer {
             .flex_col()
             .text_color(fg)
             .bg(cx.theme().background)
-            .child(header)
-            .child({
-                let weak = weak_for_drop;
-                uniform_list("rows", row_count, move |range, _window, cx| {
-                    let this = entity.read(cx);
-                    let snapshot: Vec<(usize, EntryRow, bool)> = range
-                        .clone()
-                        .filter_map(|ix| {
-                            this.rows
-                                .get(ix)
-                                .map(|row| (ix, row.clone(), this.selection.contains(&ix)))
-                        })
-                        .collect();
-                    snapshot
-                        .into_iter()
-                        .map(|(ix, row, selected)| {
-                            render_row(&weak, ix, row, selected, cx)
-                        })
-                        .collect()
-                })
-                .track_scroll(&self.scroll_handle)
-                .h_full()
-                .w_full()
-            })
+            .child(div().flex_1().min_h_0().child(Responsive::new(
+                "explorer-table",
+                move |size, _window, cx| {
+                    // The table's own width — not the window's — drives the
+                    // column budget. Publish it for the row templates (which
+                    // paint later in the frame) and use it for the header now.
+                    let visible = VisibleColumns::for_width(size.width());
+                    cols.set_if_changed(cx, visible);
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(header_row(sort, muted, border, visible, on_sort))
+                        .child(data_view)
+                        .into_any_element()
+                },
+            )))
     }
-
 }
 
 fn header_arrow(sort: Option<Sort>, column: SortColumn) -> &'static str {
@@ -419,6 +463,7 @@ fn header_row(
     sort: Option<Sort>,
     muted: Hsla,
     border: Hsla,
+    visible: VisibleColumns,
     on_sort: Rc<dyn Fn(&SortColumn, &mut Window, &mut App)>,
 ) -> Stateful<Div> {
     let column = |title: &'static str,
@@ -468,25 +513,60 @@ fn header_row(
             .flex_1()
             .min_w(COL_NAME_MIN),
         )
-        .child(column("Size", Some(SortColumn::Size), COL_SIZE, true, on_sort.clone()))
-        .child(column("Packed", None, COL_PACKED, true, on_sort.clone()))
         .child(column(
-            "Modified",
-            Some(SortColumn::Modified),
-            COL_MODIFIED,
-            false,
+            "Size",
+            Some(SortColumn::Size),
+            COL_SIZE,
+            true,
             on_sort.clone(),
         ))
-        .child(column("Attributes", None, COL_ATTRIBUTES, false, on_sort.clone()))
-        .child(column("CRC", Some(SortColumn::Crc), COL_CRC, true, on_sort.clone()))
-        .child(column("Method", None, COL_METHOD, false, on_sort))
+        .when(visible.packed, |el| {
+            el.child(column(
+                "Packed",
+                None,
+                COL_PACKED,
+                true,
+                on_sort.clone(),
+            ))
+        })
+        .when(visible.modified, |el| {
+            el.child(column(
+                "Modified",
+                Some(SortColumn::Modified),
+                COL_MODIFIED,
+                false,
+                on_sort.clone(),
+            ))
+        })
+        .when(visible.attributes, |el| {
+            el.child(column(
+                "Attributes",
+                None,
+                COL_ATTRIBUTES,
+                false,
+                on_sort.clone(),
+            ))
+        })
+        .when(visible.crc, |el| {
+            el.child(column(
+                "CRC",
+                Some(SortColumn::Crc),
+                COL_CRC,
+                true,
+                on_sort.clone(),
+            ))
+        })
+        .when(visible.method, |el| {
+            el.child(column("Method", None, COL_METHOD, false, on_sort))
+        })
 }
 
 fn render_row(
     weak: &WeakEntity<ArchiveExplorer>,
     ix: usize,
-    row: EntryRow,
+    row: &EntryRow,
     selected: bool,
+    visible: VisibleColumns,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
@@ -553,9 +633,19 @@ fn render_row(
         })
         .child(name_cell)
         .child(cell(format_size(row.size), COL_SIZE, true))
-        .child(cell(format_size(row.packed), COL_PACKED, true))
-        .child(cell(row.modified.clone(), COL_MODIFIED, false))
-        .child(cell(attr_string(&row), COL_ATTRIBUTES, false))
-        .child(cell(crc_string(&row), COL_CRC, true))
-        .child(cell(row.method.clone(), COL_METHOD, false))
+        .when(visible.packed, |el| {
+            el.child(cell(format_size(row.packed), COL_PACKED, true))
+        })
+        .when(visible.modified, |el| {
+            el.child(cell(row.modified.clone(), COL_MODIFIED, false))
+        })
+        .when(visible.attributes, |el| {
+            el.child(cell(attr_string(row), COL_ATTRIBUTES, false))
+        })
+        .when(visible.crc, |el| {
+            el.child(cell(crc_string(row), COL_CRC, true))
+        })
+        .when(visible.method, |el| {
+            el.child(cell(row.method.clone(), COL_METHOD, false))
+        })
 }

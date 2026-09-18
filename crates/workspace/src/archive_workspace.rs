@@ -739,7 +739,7 @@ impl ArchiveWorkspace {
         let Some(session) = &self.session else {
             return;
         };
-        let row = self.explorer.read(cx).rows().get(ix).cloned();
+        let row = self.explorer.read(cx).rows(cx).get(ix).cloned();
         let Some(row) = row.filter(|row| !row.is_directory) else {
             return;
         };
@@ -786,7 +786,7 @@ impl ArchiveWorkspace {
             cx.notify();
             return;
         };
-        let indices = self.explorer.read(cx).target_indices();
+        let indices = self.explorer.read(cx).target_indices(cx);
         if indices.is_empty() {
             return;
         }
@@ -847,7 +847,7 @@ impl ArchiveWorkspace {
         if self.session.is_none() {
             return;
         }
-        let Some(row) = self.explorer.read(cx).focused_row() else {
+        let Some(row) = self.explorer.read(cx).focused_row(cx) else {
             self.status = Some("Select exactly one entry to rename".into());
             cx.notify();
             return;
@@ -992,7 +992,7 @@ impl ArchiveWorkspace {
                 session.password().cloned(),
             )
         };
-        let indices = self.explorer.read(cx).target_indices();
+        let indices = self.explorer.read(cx).target_indices(cx);
         if indices.is_empty() {
             self.status = Some("Nothing selected to extract".into());
             cx.notify();
@@ -1064,7 +1064,7 @@ impl ArchiveWorkspace {
         let Some(window) = self.window else {
             return;
         };
-        let selected = self.explorer.read(cx).selected_rows();
+        let selected = self.explorer.read(cx).selected_rows(cx);
         if selected.is_empty() {
             self.status = Some("Select an entry to inspect".into());
             cx.notify();
@@ -1637,9 +1637,9 @@ impl Render for ArchiveWorkspace {
         let (status_line, status_emphasized): (SharedString, bool) = match &self.status {
             Some(message) => (message.clone(), true),
             None => {
-                let selection = self.explorer.read(cx).selected_rows();
+                let selection = self.explorer.read(cx).selected_rows(cx);
                 let line = if selection.is_empty() {
-                    format!("{} entries", self.explorer.read(cx).rows().len()).into()
+                    format!("{} entries", self.explorer.read(cx).rows(cx).len()).into()
                 } else {
                     let bytes: u64 = selection.iter().map(|row| row.size).sum();
                     format!(

@@ -12,29 +12,32 @@ const _: () = assert!(
     "app_constants::APP_NAME_LOWERCASE must match the binary name.",
 );
 
+use crate::init::crash::CrashHandler;
 use crate::init::dirs::init_paths;
+use crate::init::environment::{check_for_conpty_dll, stdout_is_a_pty};
 use crate::init::resource::load_embedded_fonts;
+use crate::init::ui::dump_all_gpui_actions;
 use app_constants::APP_NAME;
 use assets::Assets;
 use bit7z_rs::ArchiveEngine;
 use clap::Parser;
 use collections::HashMap;
 use crashes::InitCrashHandler;
-use gpui::{App, AppContext, Application, AsyncApp, Bounds, PromptButton, QuitMode, SharedString, TaskExt, TitlebarOptions, WindowBounds, WindowOptions, block_on, px, size};
+use gpui::{
+    App, AppContext, Application, AsyncApp, Bounds, PromptButton, QuitMode, SharedString, TaskExt,
+    TitlebarOptions, WindowBounds, WindowOptions, block_on, px, size,
+};
+use gpui_kit::component::Root;
 use gpui_platform;
+use release_channel::{AppCommitSha, AppVersion};
 use smol::future::poll_once;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use std::{io, process};
-use gpui_kit::component::Root;
 use util::ResultExt;
-use release_channel::{AppCommitSha, AppVersion};
 use workspace::multi_workspace::MultiWorkspace;
-use crate::init::crash::CrashHandler;
-use crate::init::environment::{check_for_conpty_dll, stdout_is_a_pty};
-use crate::init::ui::dump_all_gpui_actions;
 
 // #[cfg(feature = "mimalloc")]
 #[global_allocator]
@@ -97,7 +100,7 @@ fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
                             response.await?;
                             cx.update(|_, cx| cx.quit())
                         })
-                            .detach_and_log_err(cx);
+                        .detach_and_log_err(cx);
                     })
                     .log_err();
             } else {
@@ -137,7 +140,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                             format!(
                                 "{e:?}. See https://zed.dev/docs/linux for troubleshooting steps."
                             )
-                                .as_str(),
+                            .as_str(),
                         ))
                         .priority(Priority::High)
                         .icon(ashpd::desktop::Icon::with_names(&[
@@ -149,11 +152,10 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
 
             process::exit(1);
         })
-            .detach();
+        .detach();
     }
 }
 static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
-
 
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
@@ -239,7 +241,6 @@ fn main() {
         option_env!("ZED_COMMIT_SHA").map(|commit_sha| AppCommitSha::new(commit_sha.to_string()));
     let app_version = AppVersion::load(env!("CARGO_PKG_VERSION"), version, app_commit_sha.clone());
 
-
     rayon::ThreadPoolBuilder::new()
         .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().div_ceil(2)))
         .stack_size(10 * 1024 * 1024)
@@ -247,16 +248,12 @@ fn main() {
         .build_global()
         .unwrap();
 
-
     #[cfg(windows)]
     check_for_conpty_dll();
 
-    let app = build_application()
-        .with_assets(gpui_kit::assets::Assets);
+    let app = build_application().with_assets(gpui_kit::assets::Assets);
 
     let background_executor = app.background_executor();
-
-
 
     // let should_install_crash_handler =
     //     client::telemetry::should_install_crash_handler(*release_channel::RELEASE_CHANNEL);
@@ -284,7 +281,7 @@ fn main() {
                         app_version.minor,
                         app_version.patch,
                     )
-                        .to_string(),
+                    .to_string(),
                     binary: app_constants::APP_NAME_LOWERCASE.to_string(),
                     release_channel: release_channel::RELEASE_CHANNEL_NAME.clone(),
                     commit_sha: app_commit_sha
@@ -307,8 +304,6 @@ fn main() {
         None
     };
 
-
-
     app.run(move |cx| {
         gpui_kit::init(cx);
 
@@ -316,11 +311,14 @@ fn main() {
         cx.set_global(workspace::PendingOpen(args.paths.clone()));
 
         #[cfg(target_os = "windows")]
-        tray::init(cx, Arc::new(|cx: &mut gpui::App| {
-            if let Some(window) = workspace::globals::host_window(cx) {
-                let _ = window.update(cx, |_, window, _| window.activate_window());
-            }
-        }));
+        tray::init(
+            cx,
+            Arc::new(|cx: &mut gpui::App| {
+                if let Some(window) = workspace::globals::host_window(cx) {
+                    let _ = window.update(cx, |_, window, _| window.activate_window());
+                }
+            }),
+        );
 
         load_embedded_fonts(cx);
 
@@ -339,12 +337,13 @@ fn main() {
                 let logs_dir = paths::logs_dir().clone();
                 let version = env!("CARGO_PKG_VERSION").to_string();
                 let channel = release_channel::RELEASE_CHANNEL_NAME.to_string();
-                cx.background_executor().spawn(async move {
-                    let sent = crashes::report_pending(&logs_dir, &dsn, &version, &channel);
-                    if sent > 0 {
-                        log::info!("uploaded {sent} crash report(s)");
-                    }
-                })
+                cx.background_executor()
+                    .spawn(async move {
+                        let sent = crashes::report_pending(&logs_dir, &dsn, &version, &channel);
+                        if sent > 0 {
+                            log::info!("uploaded {sent} crash report(s)");
+                        }
+                    })
                     .detach();
             }
         }
@@ -362,14 +361,14 @@ fn main() {
                             cx.set_global(CrashHandler(client1));
                         });
                     })
-                        .detach();
+                    .detach();
                 }
             }
         }
 
         gpui_router::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(1280.0), px(820.0)), cx);
+        let bounds = Bounds::centered(None, size(px(640.0), px(480.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -446,4 +445,3 @@ struct Args {
     #[arg(long, hide = true)]
     etw_socket: Option<String>,
 }
-

@@ -30,7 +30,10 @@ use std::cmp::Ordering;
 use std::ops::Range;
 
 use gpui::prelude::*;
-use gpui::{div, px, uniform_list, AnyElement, App, Context, EventEmitter, IntoElement, SharedString, Window, Rems};
+use gpui::{
+    div, px, uniform_list, AnyElement, App, Context, EventEmitter, IntoElement, SharedString,
+    UniformListScrollHandle, Window, Rems,
+};
 use gpui_kit::component::ActiveTheme;
 use super::Content;
 use reactive_signals::reactive::Signal;
@@ -72,6 +75,8 @@ pub struct DataView<T: 'static> {
     selectable: bool,
     selected: Option<usize>,
     height: Option<f32>,
+    fill: bool,
+    scroll: Option<UniformListScrollHandle>,
 }
 
 impl<T: 'static> EventEmitter<DataViewEvent> for DataView<T> {}
@@ -102,6 +107,8 @@ impl<T: 'static> DataView<T> {
             selectable: false,
             selected: None,
             height: None,
+            fill: false,
+            scroll: None,
         }
     }
 
@@ -110,6 +117,24 @@ impl<T: 'static> DataView<T> {
     /// to both layouts — a `Grid(n)` virtualizes whole rows of `n` cells.
     pub fn height(mut self, height: f32) -> Self {
         self.height = Some(height.max(0.0));
+        self
+    }
+
+    /// Fill the parent's given space and virtualize (like [`height`][Self::height],
+    /// but sized by the surrounding layout instead of a fixed pixel count). Use
+    /// this for a body that must stretch to whatever room a flex container hands
+    /// it — a dock panel, a split pane — where the height is not known up front.
+    /// The parent must constrain the height (e.g. `flex_1().min_h_0()`).
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
+    }
+
+    /// Track the virtualized list's scroll position with a handle, so keyboard
+    /// navigation can `scroll_to_item` on it. Applies to the virtualized layouts
+    /// (`height`/`fill`); a no-op otherwise.
+    pub fn track_scroll(mut self, handle: &UniformListScrollHandle) -> Self {
+        self.scroll = Some(handle.clone());
         self
     }
 
@@ -199,25 +224,34 @@ impl<T: 'static> DataView<T> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        // let t = cx.theme();
-        // let gap: f32 = self.gap.to_pixels(t.font_size).into();
-
         let hover_bg = cx.theme().table_hover;
         let template = self.item.as_ref();
         let filter = self.filter.as_deref();
         let sort = self.sort.as_deref();
         let entity = self.source.entity().clone();
-        let built: Vec<(usize, AnyElement)> = entity.update(cx, |items, cx| {
-            let order = projection(items, filter, sort);
-            match template {
-                Some(build) => order
-                    .into_iter()
+        let built: Vec<AnyElement> = entity.update(cx, |items, cx| {
+            let Some(build) = template else {
+                return Vec::new();
+            };
+            if filter.is_none() && sort.is_none() {
+                // No projection: display order *is* source order, so hand the
+                // range to the template directly instead of materializing an
+                // index vector over the whole collection every frame.
+                return items
+                    .iter()
+                    .enumerate()
                     .skip(display.start)
                     .take(display.len())
-                    .map(|i| (i, build(&items[i], i, window, cx)))
-                    .collect(),
-                None => Vec::new(),
+                    .map(|(i, item)| build(item, i, window, cx))
+                    .collect();
             }
+            let order = projection(items, filter, sort);
+            order
+                .into_iter()
+                .skip(display.start)
+                .take(display.len())
+                .map(|i| build(&items[i], i, window, cx))
+                .collect()
         });
 
         let selectable = self.selectable;
@@ -227,10 +261,12 @@ impl<T: 'static> DataView<T> {
 
         built
             .into_iter()
-            .map(|(source_ix, element)| {
+            .enumerate()
+            .map(|(offset, element)| {
                 if !selectable {
                     return element;
                 }
+                let source_ix = display.start + offset;
                 let is_selected = selected == Some(source_ix);
                 let mut cell = div()
                     .id(("guise-dataview-item", source_ix))
@@ -284,6 +320,9 @@ impl<T: 'static> DataView<T> {
     fn projected_len(&mut self, cx: &mut Context<Self>) -> usize {
         let filter = self.filter.as_deref();
         let sort = self.sort.as_deref();
+        if filter.is_none() && sort.is_none() {
+            return self.source.entity().read(cx).len();
+        }
         let entity = self.source.entity().clone();
         entity.update(cx, |items, _| projection(items, filter, sort).len())
     }
@@ -320,7 +359,7 @@ impl<T: 'static> Render for DataView<T> {
 
         // Virtualized: uniform_list over display items (List) or whole rows
         // of `cols` cells (Grid). Only the viewport slice is built per frame.
-        if let Some(height) = self.height {
+        if self.height.is_some() || self.fill {
             let list = match self.layout {
                 DataViewLayout::List => uniform_list(
                     "guise-dataview-body",
@@ -346,9 +385,21 @@ impl<T: 'static> Render for DataView<T> {
                     )
                 }
             };
+            let list = match &self.scroll {
+                Some(handle) => list.track_scroll(handle),
+                None => list,
+            };
+            if let Some(height) = self.height {
+                return div()
+                    .w_full()
+                    .child(list.h(px(height)).w_full())
+                    .into_any_element();
+            }
             return div()
-                .w_full()
-                .child(list.h(px(height)).w_full())
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(list.flex_1().min_h_0().w_full())
                 .into_any_element();
         }
 
