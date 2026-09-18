@@ -358,7 +358,13 @@ extern "system" fn DllMain(instance: HMODULE, reason: u32, _reserved: *mut core:
     const DLL_PROCESS_ATTACH: u32 = 1;
     if reason == DLL_PROCESS_ATTACH {
         let _ = INSTANCE.set(instance.0 as usize);
-        install(instance);
+        // DllMain runs under the loader lock in the host (Explorer) process.
+        // A panic escaping `install` must never unwind into the loader — it
+        // would abort Explorer. Swallow it: the verbs simply stay
+        // unregistered and Explorer degrades instead of crashing.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            install(instance);
+        }));
     }
     1 // TRUE
 }
