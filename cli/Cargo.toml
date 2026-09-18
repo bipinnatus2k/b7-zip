@@ -13,6 +13,7 @@ path = "src/main.rs"
 bit7z-rs.workspace = true
 checksum.workspace = true
 clap.workspace = true
+explorer-menu.workspace = true
 password.workspace = true
 task.workspace = true
 temp.workspace = true

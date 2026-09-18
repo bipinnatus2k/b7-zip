@@ -20,7 +20,9 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// CLSID of the single flyout root ("Bit7zFM") the sparse manifest binds.
-pub const CLSID_BIT7ZFM_ROOT: GUID = GUID::from_u128(0x9B6F_4A50_1E2B_4C7A_9F3D_5A7C_8E9B_0A01);
+/// Defined once in `explorer-menu` so the installer and the manifest can
+/// derive the same canonical string from it.
+pub use explorer_menu::CLSID_ROOT as CLSID_BIT7ZFM_ROOT;
 
 fn executor_dir() -> Option<&'static Path> {
     static DIR: OnceLock<PathBuf> = OnceLock::new();

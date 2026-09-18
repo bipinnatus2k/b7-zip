@@ -4,11 +4,13 @@
 
   Registered per-user by `bit7z shell-menu-install` via PackageManager with
   AllowExternalContent, so b7zmenu.dll stays beside the app binaries. The
-  Verb's Clsid must match explorer-menu-host's CLSID_BIT7ZFM_ROOT, and the
-  DLL must be registered under HKCU\Software\Classes\CLSID\<clsid>\
-  InprocServer32 (the installer does both). Unsigned sparse packages require
-  Developer Mode, or a self-signed certificate trusted on the target machine.
-  Works on Win10 2004+ (loaded after a reboot) and Win11 (top-level menu).
+  Verb's Clsid is the canonical (8-4-4-4-12 hex) string form of
+  explorer_menu::CLSID_ROOT — the single source of truth pinned by that
+  crate's tests — and the DLL must be registered under
+  HKCU\Software\Classes\CLSID\<clsid>\InprocServer32 (the installer does
+  both). Unsigned sparse packages require Developer Mode, or a self-signed
+  certificate trusted on the target machine. Works on Win10 2004+ (loaded
+  after a reboot) and Win11 (top-level menu).
 -->
 <Package
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -44,7 +46,7 @@
       <uap3:Extensions>
         <uap3:Extension Category="windows.fileExplorerContextMenus">
           <uap3:FileExplorerContextMenus>
-            <Verb Id="Bit7zFM" Clsid="9B6F4A50-1E2B-4C7A-9F3D-5A7C-8E9B-0A01"/>
+            <Verb Id="Bit7zFM" Clsid="9B6F4A50-1E2B-4C7A-9F3D-5A7C8E9B0A01"/>
           </uap3:FileExplorerContextMenus>
         </uap3:Extension>
       </uap3:Extensions>

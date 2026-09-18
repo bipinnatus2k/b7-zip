@@ -42,6 +42,21 @@ pub use windows::core::BOOL;
 #[allow(unused_imports)]
 pub use windows::Win32::Foundation::HINSTANCE;
 
+/// CLSID of the single Bit7zFM flyout root the sparse manifest binds.
+///
+/// Single source of truth for the registration: the host DLL exports the
+/// COM class under this GUID, the installer derives the registry key from
+/// [`clsid_root_string`], and the appx manifest's `Verb Clsid` must carry
+/// the same canonical 8-4-4-4-12 hex form (unbraced):
+/// `9B6F4A50-1E2B-4C7A-9F3D-5A7C8E9B0A01`.
+pub const CLSID_ROOT: GUID = GUID::from_u128(0x9B6F_4A50_1E2B_4C7A_9F3D_5A7C_8E9B_0A01);
+
+/// The canonical braced string form of [`CLSID_ROOT`] used as the registry
+/// key name (`{9B6F4A50-1E2B-4C7A-9F3D-5A7C8E9B0A01}`).
+pub fn clsid_root_string() -> String {
+    format!("{{{CLSID_ROOT:?}}}")
+}
+
 /// Visibility/state of a menu entry as reported to Explorer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandState {
@@ -600,6 +615,17 @@ impl IClassFactory_Impl for ClassFactory_Impl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The appx manifest repeats this value as literal text; pin the exact
+    /// canonical form so neither a GUID format change nor a mistyped
+    /// constant can drift into a menu that never activates.
+    #[test]
+    fn clsid_root_string_is_canonical() {
+        assert_eq!(
+            clsid_root_string(),
+            "{9B6F4A50-1E2B-4C7A-9F3D-5A7C8E9B0A01}"
+        );
+    }
 
     #[test]
     fn absolute_icons_pass_through() {

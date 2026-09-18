@@ -22,9 +22,8 @@ use windows::Win32::System::Registry::{
 use windows::Win32::UI::Shell::SHChangeNotify;
 use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_FLAGS};
 
-/// Root CLSID — must match `explorer-menu-host`'s CLSID_BIT7ZFM_ROOT and the
-/// manifest Verb Clsid.
-const ROOT_CLSID: &str = "{9B6F4A50-1E2B-4C7A-9F3D-5A7C-8E9B-0A01}";
+/// The registry key name is derived from `explorer_menu::CLSID_ROOT` — the
+/// one source shared with the host DLL and the manifest Verb Clsid.
 const PACKAGE_NAME: &str = "Bit7zFM.ShellMenu";
 
 /// Locates `b7zmenu.dll` beside the CLI (or in the usual target dirs).
@@ -54,10 +53,11 @@ fn registry_sz(value: &str) -> Vec<u8> {
 }
 
 fn write_clsid(dll_path: &std::path::Path) -> Result<(), String> {
+    let root = explorer_menu::clsid_root_string();
     unsafe {
-        let clsid_key = HSTRING::from(format!("Software\\Classes\\CLSID\\{ROOT_CLSID}"));
+        let clsid_key = HSTRING::from(format!("Software\\Classes\\CLSID\\{root}"));
         let inproc_key =
-            HSTRING::from(format!("Software\\Classes\\CLSID\\{ROOT_CLSID}\\InprocServer32"));
+            HSTRING::from(format!("Software\\Classes\\CLSID\\{root}\\InprocServer32"));
 
         let mut key = HKEY::default();
         let err = RegCreateKeyExW(
@@ -109,8 +109,9 @@ fn write_clsid(dll_path: &std::path::Path) -> Result<(), String> {
 }
 
 fn delete_clsid() -> Result<(), String> {
+    let root = explorer_menu::clsid_root_string();
     unsafe {
-        let clsid_key = HSTRING::from(format!("Software\\Classes\\CLSID\\{ROOT_CLSID}"));
+        let clsid_key = HSTRING::from(format!("Software\\Classes\\CLSID\\{root}"));
         let err = RegDeleteTreeW(HKEY_CURRENT_USER, pcw(&clsid_key));
         // 2 = not found: fine when uninstalling twice.
         if err != ERROR_SUCCESS && err != windows::Win32::Foundation::WIN32_ERROR(2) {
