@@ -299,6 +299,76 @@ fn discard_unstaged_keeps_staged_state() {
 }
 
 #[test]
+fn partial_commit_renumbers_base_indices() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    temp::register_temp_root(dir.path().join("temp5")).unwrap();
+    let a = dir.path().join("a.txt");
+    let b = dir.path().join("b.txt");
+    let c = dir.path().join("c.txt");
+    std::fs::write(&a, "AAA\n").unwrap();
+    std::fs::write(&b, "BBB\n").unwrap();
+    std::fs::write(&c, "CCC\n").unwrap();
+    let archive = dir.path().join("renum.7z");
+    engine
+        .compress(&[a, b, c], &archive, &CompressOptions::default())
+        .expect("compress");
+    let mut session = ArchiveSession::open(601, engine.clone(), &archive, None).expect("open");
+
+    // Delete two entries; commit only the first one (a partial commit).
+    session.overlay_mut().remove_path("b.txt");
+    let b_row = session
+        .changes()
+        .into_iter()
+        .find(|r| r.path == "b.txt")
+        .expect("b row");
+    session.stage([b_row.id]);
+    session.overlay_mut().remove_path("c.txt");
+
+    session.commit_staged().expect("first partial commit");
+
+    // The rewrite renumbered the surviving entries; the base tree must
+    // track the new indices, or the *next* commit would delete the wrong
+    // item (or nothing at all).
+    let c_row = session
+        .changes()
+        .into_iter()
+        .find(|r| r.path == "c.txt")
+        .expect("unstaged delete survives the partial commit");
+    let tracked_index = session
+        .overlay()
+        .base()
+        .node(c_row.id)
+        .and_then(|n| n.archive_index())
+        .expect("c keeps an archive index");
+    let actual_index = engine
+        .list(&archive, None)
+        .expect("list")
+        .into_iter()
+        .find(|e| e.path == "c.txt")
+        .expect("c in rewritten archive")
+        .index;
+    assert_eq!(
+        tracked_index, actual_index,
+        "base archive_index must match the rewritten archive"
+    );
+
+    session.stage([c_row.id]);
+    session.commit_staged().expect("second partial commit");
+    let entries = engine.list(&archive, None).expect("list");
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(
+        names.contains(&"a.txt") && !names.contains(&"b.txt") && !names.contains(&"c.txt"),
+        "names: {names:?}"
+    );
+}
+
+#[test]
 fn session_store_roundtrip() {
     let _engine_guard = engine_lock();
     let _process_guard = engine_process_lock();

@@ -16,6 +16,7 @@ use bit7z_rs::{ArchiveEngine, ArchiveError};
 use fs::FsTree;
 use fs_watcher::{FsEvent, FsEventKind, FsWatcher, WatchConfig};
 use password::Password;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use vfs::{Changeset, DirtyState, NodeId, Overlay};
@@ -42,6 +43,10 @@ pub struct ArchiveSession {
     watcher: Option<FsWatcher>,
     work_dir: PathBuf,
     password: Option<Password>,
+    /// Set when a commit rewrote the archive but the follow-up re-list
+    /// failed: pending ops may address stale `archive_index` values, so the
+    /// next commit must refresh indices before touching the archive again.
+    stale_indices: bool,
 }
 
 impl ArchiveSession {
@@ -75,6 +80,7 @@ impl ArchiveSession {
             watcher,
             work_dir,
             password: password.cloned(),
+            stale_indices: false,
         })
     }
 
@@ -224,12 +230,56 @@ impl ArchiveSession {
             // (e.g. a modified synthetic directory) must not leave the
             // session permanently dirty.
             self.overlay.on_commit_success();
+            self.retry_index_refresh_if_stale()?;
             return Ok(());
         }
         let ops = task::changeset_to_ops(&changeset);
-        self.engine
-            .update(&self.archive_path, &ops, self.password.as_ref())?;
+        if let Err(err) = self
+            .engine
+            .update(&self.archive_path, &ops, self.password.as_ref())
+        {
+            // A failed rewrite may still have altered the archive; refuse
+            // to trust pending op indices until a re-list succeeds.
+            self.stale_indices = true;
+            return Err(SessionError::Archive(err));
+        }
         self.overlay.on_commit_success();
+        self.refresh_archive_indices()?;
+        Ok(())
+    }
+
+    /// Re-list the (rewritten) archive and stamp every base node with its
+    /// current entry index. A rewrite renumbers the surviving entries, so a
+    /// later commit's Delete/Modify/Rename ops would otherwise address the
+    /// wrong item.
+    fn refresh_archive_indices(&mut self) -> Result<(), SessionError> {
+        let entries = match self.engine.list(&self.archive_path, self.password.as_ref()) {
+            Ok(entries) => entries,
+            Err(err) => {
+                self.stale_indices = true;
+                return Err(SessionError::IndexRefreshFailed(err));
+            }
+        };
+        let index_of: HashMap<String, u32> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.path.trim_end_matches('/').replace('\\', "/"),
+                    e.index,
+                )
+            })
+            .collect();
+        self.overlay.reindex_base(|path| index_of.get(path).copied());
+        self.stale_indices = false;
+        Ok(())
+    }
+
+    /// Retry a deferred index refresh (set after a commit whose re-list
+    /// failed) so no later commit runs with stale indices.
+    fn retry_index_refresh_if_stale(&mut self) -> Result<(), SessionError> {
+        if self.stale_indices {
+            self.refresh_archive_indices()?;
+        }
         Ok(())
     }
 
@@ -300,12 +350,21 @@ impl ArchiveSession {
             // (e.g. a modified synthetic directory) are dropped instead of
             // lingering.
             self.overlay.apply_committed(&committed);
+            self.retry_index_refresh_if_stale()?;
             return Ok(committed);
         }
         let ops = task::changeset_to_ops(&committed);
-        self.engine
-            .update(&self.archive_path, &ops, self.password.as_ref())?;
+        if let Err(err) = self
+            .engine
+            .update(&self.archive_path, &ops, self.password.as_ref())
+        {
+            // A failed rewrite may still have altered the archive; refuse
+            // to trust pending op indices until a re-list succeeds.
+            self.stale_indices = true;
+            return Err(SessionError::Archive(err));
+        }
         self.overlay.apply_committed(&committed);
+        self.refresh_archive_indices()?;
         Ok(committed)
     }
 
@@ -349,6 +408,7 @@ impl ArchiveSession {
             .list(&self.archive_path, self.password.as_ref())?;
         let tree = archive_vfs_crate::build_tree(&entries);
         self.overlay = Overlay::new(tree);
+        self.stale_indices = false;
         self.fs_tree = FsTree::scan(&self.work_dir)?;
         // Re-apply local files from the working directory onto the fresh
         // archive tree so unsaved edits survive a reload as dirty nodes.
@@ -376,4 +436,6 @@ pub enum SessionError {
     EntryNotFound(u32),
     #[error("session already exists: {0}")]
     SessionExists(u64),
+    #[error("commit applied, but the archive could not be re-listed to refresh entry indices: {0}")]
+    IndexRefreshFailed(#[source] ArchiveError),
 }

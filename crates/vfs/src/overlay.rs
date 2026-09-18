@@ -281,6 +281,25 @@ impl Overlay {
             .find(|id| self.base.node(*id).and_then(|n| n.archive_index()) == Some(index))
     }
 
+    /// Re-stamps the `archive_index` attribute of base nodes after the
+    /// archive file was rewritten. 7-Zip's update callback renumbers the
+    /// surviving entries, so a later commit must address them by their new
+    /// index. `new_index_of` is consulted with each node's archive path;
+    /// nodes whose path is not found keep their current index.
+    pub fn reindex_base(&mut self, new_index_of: impl Fn(&str) -> Option<u32>) {
+        for id in self.base.all_ids() {
+            let Some(path) = self.base.path_of(id) else {
+                continue;
+            };
+            let Some(index) = new_index_of(&path) else {
+                continue;
+            };
+            if let Some(node) = self.base.node_mut(id) {
+                node.set_attr(crate::attr::ARCHIVE_INDEX, crate::attr::AttrValue::UInt(index as u64));
+            }
+        }
+    }
+
     /// Merge the nodes of `source` into the working view.
     ///
     /// Nodes are aligned by relative path. A node present in `source` but
@@ -644,6 +663,24 @@ mod tests {
             .expect("unstaged delete kept");
         assert!(overlay.base().node(deleted).is_some());
         assert_eq!(overlay.unstaged_view().len(), 1);
+    }
+
+    #[test]
+    fn reindex_base_restamps_by_path() {
+        let mut overlay = Overlay::new(sample_base());
+        // Simulate an archive rewrite that swapped the two entry indices.
+        overlay.reindex_base(|path| match path {
+            "dir/b.txt" => Some(0),
+            "a.txt" => Some(1),
+            _ => None,
+        });
+        let a = overlay.base().resolve_path("a.txt").unwrap();
+        assert_eq!(overlay.base().node(a).unwrap().archive_index(), Some(1));
+        let b = overlay.base().resolve_path("dir/b.txt").unwrap();
+        assert_eq!(overlay.base().node(b).unwrap().archive_index(), Some(0));
+        // A synthetic dir without an archive entry keeps its absent index.
+        let dir = overlay.base().resolve_path("dir").unwrap();
+        assert_eq!(overlay.base().node(dir).unwrap().archive_index(), None);
     }
 
     #[test]
