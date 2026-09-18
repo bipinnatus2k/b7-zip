@@ -5,7 +5,7 @@
 
 use gpui_kit::base::ResizeHandleContext;
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Selectable as _, Sizable as _,
+    ActiveTheme as _, IconName, Selectable as _, Sizable as _, WindowExt,
     button::{Button, ButtonVariants as _},
     dock::{
         BasePanelView, DockAreaRenderer, DockContext, DockSkin, DragPanel, DropIndicator, NodeId,
@@ -393,7 +393,16 @@ fn close_workspace_tab(
                     .ok()
                     .flatten();
                 if let Some(commit) = commit {
-                    let _ = commit.await;
+                    // A failed commit must NOT close the tab: closing drops
+                    // the session and deletes its working directory,
+                    // silently destroying the uncommitted edits the commit
+                    // was about to save. Report and keep the tab open.
+                    if let Err(err) = commit.await {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            window.push_notification(format!("Commit failed: {err}"), cx)
+                        });
+                        return;
+                    }
                 }
                 let _ = handle.update(cx, |_, window, cx| group.close(panel_id, window, cx));
             }
