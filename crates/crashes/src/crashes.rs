@@ -23,6 +23,9 @@ use std::{
 
 pub use minidumper::Client;
 
+pub mod report;
+pub use report::report_pending;
+
 const CRASH_HANDLER_PING_TIMEOUT: Duration = Duration::from_secs(60);
 const CRASH_HANDLER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
