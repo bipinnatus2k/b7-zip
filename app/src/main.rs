@@ -25,7 +25,7 @@ use gpui_platform;
 use smol::future::poll_once;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use std::{io, process};
 use gpui_kit::component::Root;
@@ -263,11 +263,21 @@ fn main() {
 
     let should_install_crash_handler = true;
 
+    // Unique per run so concurrent/quick-restart sessions never overwrite
+    // each other's dumps.
+    let session_id = format!(
+        "{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+
     let crash_handler = if should_install_crash_handler {
         Some(
             app.background_executor().spawn(crashes::init(
                 InitCrashHandler {
-                    session_id: 1.to_string(),
+                    session_id,
                     // strip the build and channel information from the version string, we send them separately
                     zed_version: semver::Version::new(
                         app_version.major,
@@ -275,7 +285,7 @@ fn main() {
                         app_version.patch,
                     )
                         .to_string(),
-                    binary: "zed".to_string(),
+                    binary: app_constants::APP_NAME_LOWERCASE.to_string(),
                     release_channel: release_channel::RELEASE_CHANNEL_NAME.clone(),
                     commit_sha: app_commit_sha
                         .as_ref()
@@ -302,12 +312,42 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
 
-        // MultiWorkspace::init(cx);
+        MultiWorkspace::init(cx);
+        cx.set_global(workspace::PendingOpen(args.paths.clone()));
+
+        #[cfg(target_os = "windows")]
+        tray::init(cx, Arc::new(|cx: &mut gpui::App| {
+            if let Some(window) = workspace::globals::host_window(cx) {
+                let _ = window.update(cx, |_, window, _| window.activate_window());
+            }
+        }));
 
         load_embedded_fonts(cx);
 
+        // Settings before anything that reads a preference (telemetry, shell
+        // menu behavior). Crash reporting runs after: it is opt-in via
+        // settings and uploads leftover reports from previous runs.
+        settings::init(cx);
+
         #[cfg(target_os = "windows")]
         etw_tracing_ui::init(cx);
+
+        {
+            let telemetry_on = settings::global(cx).telemetry_enabled;
+            let dsn = settings::global(cx).telemetry_dsn.clone();
+            if telemetry_on && let Some(dsn) = dsn.filter(|dsn| !dsn.trim().is_empty()) {
+                let logs_dir = paths::logs_dir().clone();
+                let version = env!("CARGO_PKG_VERSION").to_string();
+                let channel = release_channel::RELEASE_CHANNEL_NAME.to_string();
+                cx.background_executor().spawn(async move {
+                    let sent = crashes::report_pending(&logs_dir, &dsn, &version, &channel);
+                    if sent > 0 {
+                        log::info!("uploaded {sent} crash report(s)");
+                    }
+                })
+                    .detach();
+            }
+        }
 
         if let Some(mut crash_handler) = crash_handler {
             let crash_handler2 = block_on(poll_once(&mut crash_handler));
@@ -329,7 +369,7 @@ fn main() {
 
         gpui_router::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(800.0), px(720.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1280.0), px(820.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -340,7 +380,6 @@ fn main() {
                 ..Default::default()
             },
             move |window, cx| {
-                let paths = args.paths.clone();
                 let view = cx.new(|cx| MultiWorkspace::new(window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
