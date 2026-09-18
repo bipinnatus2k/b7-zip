@@ -220,7 +220,15 @@ fn run_job_with_pause(
                 progress: Some(progress),
                 file: Some(file),
             };
-            engine.test_with_options(archive, password, &options)?;
+            let result = engine.test_with_options(archive, password, &options)?;
+            // A passing `Ok` only means the test ran; integrity failures come
+            // back as a TestResult, so the job must fail the same way.
+            if !result.all_ok {
+                return Err(bit7z_rs::ArchiveError::Corrupted(format!(
+                    "{} of {} items failed the integrity test",
+                    result.failed_count, result.total
+                )));
+            }
             Ok(())
         }
         JobSpec::Add { archive, items, .. } => {

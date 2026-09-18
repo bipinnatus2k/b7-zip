@@ -170,3 +170,67 @@ fn test_emits_progress_events() {
         "test must report non-zero progress at some point (file-level or final)"
     );
 }
+
+/// Regression: a Test job must surface integrity failures as a failed task.
+/// The engine returns Ok(TestResult { all_ok: false, .. }) for a corrupt
+/// archive; the runner used to drop the result and report success.
+#[test]
+fn test_job_fails_on_corrupted_archive() {
+    let (_engine_guard, _process_guard) = engine_locks();
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    // Incompressible payload so the corrupted bytes land in stored data.
+    let mut state: u64 = 0x243F6A8885A308D3;
+    let mut next_byte = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state as u8
+    };
+    let bytes: Vec<u8> = (0..256 * 1024).map(|_| next_byte()).collect();
+    std::fs::write(src.join("payload.bin"), &bytes).unwrap();
+    let archive = dir.path().join("corrupt.7z");
+    engine
+        .compress(&[src.clone()], &archive, &CompressOptions::default())
+        .expect("compress");
+
+    // Flip a byte in the middle of the file: past the header CRC region,
+    // inside the solid compressed data stream.
+    let mut raw = std::fs::read(&archive).unwrap();
+    let mid = raw.len() / 2;
+    raw[mid] ^= 0xFF;
+    std::fs::write(&archive, &raw).unwrap();
+
+    let spec = JobSpec::Test {
+        archive,
+        password_hint: false,
+    };
+    let runner = TaskRunner::new(engine);
+    let rx = runner.run_with_controls(
+        spec,
+        None,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let mut finished = None;
+    while let Ok(event) = rx.recv() {
+        if let TaskEvent::Finished { success, message } = event {
+            finished = Some((success, message));
+            break;
+        }
+    }
+    let (success, message) = finished.expect("job must finish");
+    assert!(
+        !success,
+        "corrupted archive must not report success (message: {message})"
+    );
+    assert!(
+        message.contains("failed the integrity test"),
+        "failure message must name the integrity failures, got: {message}"
+    );
+}
