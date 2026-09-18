@@ -4,14 +4,14 @@
 
 use crate::diff_panel::{DiffContentProvider, DiffPanel, Side};
 use crate::globals;
-use compare::{tree_vs_tree, DiffReport};
+use compare::{DiffReport, tree_vs_tree};
 use explorer::explorer::{ArchiveExplorer, ExplorerCommand, ExplorerEvent};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Action as _, App, AppContext, AnyWindowHandle, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, PromptLevel, Render,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, Task,
-    UniformListScrollHandle, WeakEntity, Window, div, hsla, px, uniform_list,
+    Action as _, AnyWindowHandle, App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, PromptLevel, Render, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Task, UniformListScrollHandle, WeakEntity,
+    Window, div, hsla, px, uniform_list,
 };
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -355,18 +355,19 @@ impl ArchiveWorkspace {
         cx: &mut Context<Self>,
     ) -> (Entity<ArchiveExplorer>, Vec<gpui::Subscription>) {
         let explorer = cx.new(ArchiveExplorer::new);
-        let subscription = cx.subscribe(
-            &explorer,
-            |this, _explorer, event: &ExplorerEvent, cx| {
-                this.on_explorer_event(event.clone(), cx);
-            },
-        );
+        let subscription = cx.subscribe(&explorer, |this, _explorer, event: &ExplorerEvent, cx| {
+            this.on_explorer_event(event.clone(), cx);
+        });
         (explorer, vec![subscription])
     }
 
     fn bind_session(&mut self, session: Arc<Mutex<ArchiveSession>>, cx: &mut Context<Self>) {
         {
-            let archive = session.lock().expect("session lock poisoned").archive_path().to_path_buf();
+            let archive = session
+                .lock()
+                .expect("session lock poisoned")
+                .archive_path()
+                .to_path_buf();
             settings::update(cx, |settings| {
                 settings.push_recent_archive(&archive.display().to_string());
             });
@@ -405,10 +406,12 @@ impl ArchiveWorkspace {
     }
 
     fn start_watch_loop(&mut self, cx: &mut Context<Self>) {
-        self._watch = Some(cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(WATCH_POLL_INTERVAL).await;
-            if this.update(cx, |this, cx| this.poll_watch(cx)).is_err() {
-                break;
+        self._watch = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(WATCH_POLL_INTERVAL).await;
+                if this.update(cx, |this, cx| this.poll_watch(cx)).is_err() {
+                    break;
+                }
             }
         }));
     }
@@ -463,7 +466,10 @@ impl ArchiveWorkspace {
         cx.notify();
         cx.background_spawn(async move {
             let mut session = session.lock().expect("session lock poisoned");
-            session.commit_staged().map(|_| ()).map_err(|err| err.to_string())
+            session
+                .commit_staged()
+                .map(|_| ())
+                .map_err(|err| err.to_string())
         })
     }
 
@@ -526,10 +532,7 @@ impl ArchiveWorkspace {
 
     fn unstage_all(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = &self.session {
-            session
-                .lock()
-                .expect("session lock poisoned")
-                .unstage_all();
+            session.lock().expect("session lock poisoned").unstage_all();
         }
         cx.notify();
     }
@@ -542,7 +545,8 @@ impl ArchiveWorkspace {
                 .discard_unstaged();
         }
         self.refresh_dirty(cx);
-        self.explorer.update(cx, |explorer, cx| explorer.refresh(cx));
+        self.explorer
+            .update(cx, |explorer, cx| explorer.refresh(cx));
         cx.notify();
     }
 
@@ -552,7 +556,8 @@ impl ArchiveWorkspace {
             Err(err) => self.status = Some(format!("Write failed: {err}").into()),
         }
         self.refresh_dirty(cx);
-        self.explorer.update(cx, |explorer, cx| explorer.refresh(cx));
+        self.explorer
+            .update(cx, |explorer, cx| explorer.refresh(cx));
         cx.notify();
     }
 
@@ -597,7 +602,9 @@ impl ArchiveWorkspace {
         let summary = if changes.is_empty() {
             "No changes — the working tree matches the archive".to_string()
         } else {
-            format!("{staged_count} staged, {unstaged_count} unstaged — click an entry to toggle staging")
+            format!(
+                "{staged_count} staged, {unstaged_count} unstaged — click an entry to toggle staging"
+            )
         };
 
         let header = div()
@@ -692,13 +699,7 @@ impl ArchiveWorkspace {
                                     weak.update(cx, |this, cx| this.toggle_stage(entry.id, cx))
                                         .ok();
                                 })
-                                .child(
-                                    div()
-                                        .w(px(12.0))
-                                        .text_xs()
-                                        .text_color(color)
-                                        .child(letter),
-                                )
+                                .child(div().w(px(12.0)).text_xs().text_color(color).child(letter))
                                 .child(
                                     div()
                                         .flex_1()
@@ -710,11 +711,7 @@ impl ArchiveWorkspace {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(if entry.staged {
-                                            success
-                                        } else {
-                                            muted
-                                        })
+                                        .text_color(if entry.staged { success } else { muted })
                                         .child(if entry.staged { "staged" } else { "unstaged" }),
                                 )
                         })
@@ -859,7 +856,10 @@ impl ArchiveWorkspace {
             return;
         };
         let old_name = row.path.rsplit('/').next().unwrap_or(&row.path).to_string();
-        let parent = row.path.rsplit_once('/').map(|(parent, _)| parent.to_string());
+        let parent = row
+            .path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent.to_string());
 
         let weak = cx.weak_entity();
         let engine = globals::engine(cx);
@@ -879,11 +879,7 @@ impl ArchiveWorkspace {
             dialog
                 .title("Rename")
                 .w(px(380.0))
-                .child(
-                    div()
-                        .p_3()
-                        .child(Input::new(&input)),
-                )
+                .child(div().p_3().child(Input::new(&input)))
                 .on_ok(move |_, _, cx| {
                     let new_name = input.read(cx).value().trim().to_string();
                     if new_name.is_empty() || new_name.contains('/') {
@@ -896,7 +892,9 @@ impl ArchiveWorkspace {
                     if new_path == old_name {
                         return true;
                     }
-                    let Some(engine) = engine.clone() else { return true };
+                    let Some(engine) = engine.clone() else {
+                        return true;
+                    };
                     let ops = vec![bit7z_rs::EngineOp::Rename {
                         archive_index,
                         new_path,
@@ -964,7 +962,8 @@ impl ArchiveWorkspace {
             let _ = weak.update(cx, |this, cx| {
                 this.status = Some(format!("{outcome} file(s) added to the staging area").into());
                 this.refresh_dirty(cx);
-                this.explorer.update(cx, |explorer, cx| explorer.refresh(cx));
+                this.explorer
+                    .update(cx, |explorer, cx| explorer.refresh(cx));
                 cx.notify();
             });
         })
@@ -1068,16 +1067,16 @@ impl ArchiveWorkspace {
                     vec![
                         ("Name".into(), row.name.clone().into()),
                         ("Path".into(), row.path.clone().into()),
-                        (
-                            "Size".into(),
-                            explorer::model::format_size(row.size).into(),
-                        ),
+                        ("Size".into(), explorer::model::format_size(row.size).into()),
                         (
                             "Packed".into(),
                             explorer::model::format_size(row.packed).into(),
                         ),
                         ("Modified".into(), row.modified.clone().into()),
-                        ("Attributes".into(), explorer::model::attr_string(row).into()),
+                        (
+                            "Attributes".into(),
+                            explorer::model::attr_string(row).into(),
+                        ),
                         (
                             "CRC".into(),
                             row.crc
@@ -1187,7 +1186,11 @@ impl ArchiveWorkspace {
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let _ = weak.update(cx, |this, cx| {
-                                        this.spawn_cross_compare(target_session.clone(), title.clone(), cx)
+                                        this.spawn_cross_compare(
+                                            target_session.clone(),
+                                            title.clone(),
+                                            cx,
+                                        )
                                     });
                                 })
                         })
@@ -1283,7 +1286,8 @@ impl ArchiveWorkspace {
 
     /// Compares the archive's base tree against the working view and opens
     /// the diff panel with the report.
-    fn open_diff_panel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {        let Some(session) = &self.session else {
+    fn open_diff_panel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else {
             self.status = Some("Open an archive first".into());
             cx.notify();
             return;
@@ -1346,17 +1350,26 @@ impl ArchiveWorkspace {
         let runner = TaskRunner::new(engine);
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let pause = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let rx = runner.run_with_controls(spec.clone(), password.as_ref(), cancel.clone(), pause.clone());
+        let rx = runner.run_with_controls(
+            spec.clone(),
+            password.as_ref(),
+            cancel.clone(),
+            pause.clone(),
+        );
 
         // The WinRAR-style progress page owns the job: status fields, pause
         // and cancel controls, and the finished-card. This workspace listens
         // for the terminal event to refresh its tree.
         let panel_title: SharedString = match &spec {
             JobSpec::Extract { archive, .. } => format!("Extracting {}", archive.display()).into(),
-            JobSpec::Compress { target, .. } => format!("Compressing to {}", target.display()).into(),
+            JobSpec::Compress { target, .. } => {
+                format!("Compressing to {}", target.display()).into()
+            }
             JobSpec::Test { archive, .. } => format!("Testing {}", archive.display()).into(),
             JobSpec::Add { archive, .. } => format!("Updating {}", archive.display()).into(),
-            JobSpec::Delete { archive, .. } => format!("Deleting from {}", archive.display()).into(),
+            JobSpec::Delete { archive, .. } => {
+                format!("Deleting from {}", archive.display()).into()
+            }
             JobSpec::Rename { archive, .. } => format!("Renaming in {}", archive.display()).into(),
             JobSpec::NewFolder { archive, .. } => format!("Updating {}", archive.display()).into(),
             JobSpec::Checksum { path, .. } => format!("Checksum {}", path.display()).into(),
@@ -1402,7 +1415,8 @@ impl ArchiveWorkspace {
                                     // Archive-rewriting jobs (add/delete) changed
                                     // the entry tree behind the explorer's back.
                                     this.refresh_dirty(cx);
-                                    this.explorer.update(cx, |explorer, cx| explorer.refresh(cx));
+                                    this.explorer
+                                        .update(cx, |explorer, cx| explorer.refresh(cx));
                                 }
                                 cx.notify();
                             });
@@ -1442,9 +1456,9 @@ impl Render for ArchiveWorkspace {
                         .label("Extract")
                         .ghost()
                         .xsmall()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.extract_selected(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.extract_selected(window, cx)),
+                        ),
                 )
                 .child(
                     Button::new("add")
@@ -1458,18 +1472,18 @@ impl Render for ArchiveWorkspace {
                         .label("Rename")
                         .ghost()
                         .xsmall()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.rename_selected_in(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.rename_selected_in(window, cx)),
+                        ),
                 )
                 .child(
                     Button::new("properties")
                         .label("Properties")
                         .ghost()
                         .xsmall()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.show_properties(window, cx)
-                        })),
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.show_properties(window, cx)),
+                        ),
                 )
                 .child(
                     Button::new("test")
@@ -1479,22 +1493,16 @@ impl Render for ArchiveWorkspace {
                         .on_click(cx.listener(|this, _, _, cx| this.test_archive(cx))),
                 )
                 .child(
-                    Button::new("diff")
-                        .label("Diff")
-                        .ghost()
-                        .xsmall()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_diff_panel(window, cx)
-                        })),
+                    Button::new("diff").label("Diff").ghost().xsmall().on_click(
+                        cx.listener(|this, _, window, cx| this.open_diff_panel(window, cx)),
+                    ),
                 )
                 .child(
                     Button::new("compare")
                         .label("Compare with…")
                         .ghost()
                         .xsmall()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.compare_with(window, cx)
-                        })),
+                        .on_click(cx.listener(|this, _, window, cx| this.compare_with(window, cx))),
                 )
                 .child(
                     Button::new("toggle-changes")
@@ -1518,9 +1526,7 @@ impl Render for ArchiveWorkspace {
                     .label("Enter password")
                     .primary()
                     .xsmall()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.enter_password(window, cx)
-                    })),
+                    .on_click(cx.listener(|this, _, window, cx| this.enter_password(window, cx))),
             );
         }
         if self.dirty {
@@ -1601,18 +1607,14 @@ impl Render for ArchiveWorkspace {
                 .flex_shrink_0()
                 .border_b_1()
                 .border_color(border)
-                .bg(hsla(theme.warning.h, theme.warning.s, theme.warning.l, 0.08))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.warning)
-                        .child("Password:"),
-                )
-                .child(
-                    div()
-                        .w(px(240.0))
-                        .child(Input::new(&entry)),
-                )
+                .bg(hsla(
+                    theme.warning.h,
+                    theme.warning.s,
+                    theme.warning.l,
+                    0.08,
+                ))
+                .child(div().text_xs().text_color(theme.warning).child("Password:"))
+                .child(div().w(px(240.0)).child(Input::new(&entry)))
                 .child(
                     Button::new("password-ok")
                         .label("OK")
@@ -1692,12 +1694,7 @@ impl Render for ArchiveWorkspace {
                         .flex()
                         .flex_col()
                         .gap_0p5()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child("Recent archives"),
-                        )
+                        .child(div().text_xs().text_color(muted).child("Recent archives"))
                         .children(rows),
                 )
             };
@@ -1780,7 +1777,13 @@ impl Render for ArchiveWorkspace {
                         muted
                     })
                     .when(status_emphasized, |el| {
-                        el.child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(cx.theme().primary))
+                        el.child(
+                            div()
+                                .w(px(6.0))
+                                .h(px(6.0))
+                                .rounded_full()
+                                .bg(cx.theme().primary),
+                        )
                     })
                     .child(status_line),
             )
@@ -1873,12 +1876,7 @@ impl DiffContentProvider for CrossWorkspaceProvider {
                 .working()
                 .node(node_id)
                 .and_then(|n| n.archive_index())
-                .or_else(|| {
-                    overlay
-                        .base()
-                        .node(node_id)
-                        .and_then(|n| n.archive_index())
-                })?;
+                .or_else(|| overlay.base().node(node_id).and_then(|n| n.archive_index()))?;
             (
                 session.archive_path().to_path_buf(),
                 index,
