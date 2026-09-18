@@ -127,6 +127,10 @@ pub struct MultiWorkspace {
     core: Core<WorkspaceAdapter>,
     adapter: WorkspaceAdapter,
     workspaces: HashMap<EntityId, Entity<ArchiveWorkspace>>,
+    /// The always-present, retained home tab. Layout resets re-center *this*
+    /// entity (registered in `workspaces` and the `WorkspaceRegistry`) rather
+    /// than building an untracked replacement.
+    home: Entity<ArchiveWorkspace>,
     last_layout_state: Option<DockAreaState>,
     _save_layout_task: Option<Task<()>>,
 }
@@ -240,17 +244,11 @@ impl MultiWorkspace {
         let weak_dock_area = dock_area.downgrade();
         globals::set_dock_area(cx, weak_dock_area.clone());
 
-        match Self::load_layout(dock_area.clone(), window, cx) {
-            Ok(()) => {}
-            Err(err) => {
-                eprintln!("load layout error: {err:?}");
-                Self::reset_default_layout(weak_dock_area.clone(), window, cx);
-            }
-        }
-
         // The center holds live workspaces, which are session state — never
         // restored from disk. Whatever the saved layout put there is replaced
-        // by a fresh home tab; tool docks stay as restored.
+        // by the home tab; tool docks stay as restored. The home is built
+        // *before* the layout load/reset so a reset re-centers this same
+        // tracked entity instead of spawning an unregistered replacement.
         let keys = Rc::new(RefCell::new(HashMap::new()));
         let home = cx.new(|cx| ArchiveWorkspace::home(cx));
         let home_id = home.entity_id();
@@ -258,6 +256,15 @@ impl MultiWorkspace {
         globals::register_workspace(cx, home_id.as_u64(), home.downgrade());
         let window_handle = window.window_handle();
         home.update(cx, |home, _| home.set_window(window_handle));
+
+        match Self::load_layout(dock_area.clone(), window, cx) {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("load layout error: {err:?}");
+                Self::reset_default_layout(weak_dock_area.clone(), &home, window, cx);
+            }
+        }
+
         dock_area.update(cx, |area, cx| {
             let center = DockLayout::tabs()
                 .panel_view(panel_handle(home.clone()), cx)
@@ -293,7 +300,7 @@ impl MultiWorkspace {
             .detach();
 
         let adapter = WorkspaceAdapter { keys: keys.clone() };
-        let workspaces = HashMap::from([(home_id, home)]);
+        let workspaces = HashMap::from([(home_id, home.clone())]);
         let core = Core::new(home_id, true);
         let focus_handle = cx.focus_handle();
         let mut this = Self {
@@ -303,6 +310,7 @@ impl MultiWorkspace {
             core,
             adapter,
             workspaces,
+            home,
             last_layout_state: None,
             _save_layout_task: None,
         };
@@ -559,8 +567,10 @@ impl MultiWorkspace {
             let weak_dock_area = dock_area.downgrade();
             cx.spawn_in(window, async move |this, window| {
                 if answer.await == Ok(0) {
-                    _ = this.update_in(window, |_, window, cx| {
-                        Self::reset_default_layout(weak_dock_area, window, cx);
+                    _ = this.update_in(window, |this, window, cx| {
+                        // Re-center the tracked home, not a fresh orphan.
+                        let home = this.home.clone();
+                        Self::reset_default_layout(weak_dock_area, &home, window, cx);
                     });
                 }
             })
@@ -577,11 +587,18 @@ impl MultiWorkspace {
         })
     }
 
-    fn reset_default_layout(dock_area: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
+    fn reset_default_layout(
+        dock_area: WeakEntity<DockArea>,
+        home: &Entity<ArchiveWorkspace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         // Panels go in through `panel_handle` — that carries the presentation
         // handle, so tabs draw the panel's `title` and not its `panel_name`.
+        // `home` is the already-tracked retained workspace, so the reset never
+        // orphans a registered home or leaves an untracked one in the center.
         let center = DockLayout::tabs()
-            .panel_view(panel_handle(cx.new(|cx| ArchiveWorkspace::home(cx))), cx)
+            .panel_view(panel_handle(home.clone()), cx)
             .active_index(0);
 
         // The left dock holds its own tab group.
