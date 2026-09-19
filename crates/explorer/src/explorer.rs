@@ -25,7 +25,7 @@ use session::ArchiveSession;
 use std::sync::{Arc, Mutex};
 use ui::components::Responsive;
 use ui::data::table_view::{
-    Align, Column as TableColumn, SelectionMode, TableView, TableViewEvent,
+    Align, Column as TableColumn, SelectionMode, SortDir, TableView, TableViewEvent,
 };
 
 gpui::actions!(
@@ -37,6 +37,9 @@ gpui::actions!(
         ToggleAttributesColumn,
         ToggleCrcColumn,
         ToggleMethodColumn,
+        ToggleTypeColumn,
+        SortByType,
+        ClearSelection,
     ]
 );
 
@@ -89,31 +92,17 @@ impl Focusable for ArchiveExplorer {
     }
 }
 
-/// Column identity in the `TableView`: the Name column is 0, the data
-/// columns follow [`ColumnKind`] declaration order starting at 1.
+/// Column identity in the `TableView`: the Name column is 0, data columns
+/// follow the canonical [`ColumnKind`] order (`model::column_rank`), so
+/// identity and display order both derive from the enum.
 const NAME_COLUMN_ID: u64 = 0;
 
 fn column_id(kind: ColumnKind) -> u64 {
-    match kind {
-        ColumnKind::Size => 1,
-        ColumnKind::Packed => 2,
-        ColumnKind::Modified => 3,
-        ColumnKind::Attributes => 4,
-        ColumnKind::Crc => 5,
-        ColumnKind::Method => 6,
-    }
+    model::column_rank(kind) as u64 + 1
 }
 
 fn column_kind_by_id(id: u64) -> Option<ColumnKind> {
-    Some(match id {
-        1 => ColumnKind::Size,
-        2 => ColumnKind::Packed,
-        3 => ColumnKind::Modified,
-        4 => ColumnKind::Attributes,
-        5 => ColumnKind::Crc,
-        6 => ColumnKind::Method,
-        _ => return None,
-    })
+    model::ALL_COLUMN_KINDS.get(id.checked_sub(1)? as usize).copied()
 }
 
 /// The `TableView` column definitions for a visible-column state.
@@ -163,6 +152,9 @@ fn build_table_columns(
                 .text(|row| crc_string(row).into())
                 .sortable_by(model::dirs_first(|a, b| a.crc.cmp(&b.crc))),
             ColumnKind::Method => base.text(|row| row.method.clone().into()),
+            ColumnKind::Type => base
+                .text(|row| model::type_label(row).into())
+                .sortable_by(model::dirs_first(|a, b| a.type_key.cmp(&b.type_key))),
         };
         out.push(column);
     }
@@ -448,20 +440,43 @@ impl ArchiveExplorer {
         }
     }
 
-    /// Shows a hidden column (appended last, at default width) or hides a
-    /// visible one, rebuilding the table's columns.
+    /// Shows a hidden column or hides a visible one, rebuilding the table's
+    /// columns. A re-shown column returns to its canonical slot
+    /// (`model::column_rank` order, right behind the Name column).
     fn toggle_column(&mut self, kind: ColumnKind, cx: &mut Context<Self>) {
         if let Some(at) = self.columns.iter().position(|column| column.kind == kind) {
             self.columns.remove(at);
         } else {
-            self.columns.push(model::Column {
-                kind,
-                width: kind.default_width(),
-            });
+            self.show_column(kind);
         }
         let defs = build_table_columns(&self.columns, self.name_width);
         self.table.update(cx, |table, cx| table.set_columns(defs, cx));
         cx.notify();
+    }
+
+    /// Makes a hidden column visible at its canonical slot. No-op when it is
+    /// already visible.
+    fn show_column(&mut self, kind: ColumnKind) {
+        if self
+            .columns
+            .iter()
+            .any(|column| column.kind == kind)
+        {
+            return;
+        }
+        let rank = model::column_rank(kind);
+        let at = self
+            .columns
+            .iter()
+            .position(|column| model::column_rank(column.kind) > rank);
+        let column = model::Column {
+            kind,
+            width: kind.default_width(),
+        };
+        match at {
+            Some(at) => self.columns.insert(at, column),
+            None => self.columns.push(column),
+        }
     }
 
     fn on_toggle_size_column(
@@ -516,6 +531,32 @@ impl ArchiveExplorer {
         cx: &mut Context<Self>,
     ) {
         self.toggle_column(ColumnKind::Method, cx);
+    }
+
+    fn on_toggle_type_column(
+        &mut self,
+        _: &ToggleTypeColumn,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.toggle_column(ColumnKind::Type, cx);
+    }
+
+    /// "Sort by type": surfaces the Type column (at its canonical slot right
+    /// behind Name) when hidden, then sorts by it ascending — header clicks
+    /// cycle direction from there.
+    fn on_sort_by_type(&mut self, _: &SortByType, _: &mut Window, cx: &mut Context<Self>) {
+        self.show_column(ColumnKind::Type);
+        let defs = build_table_columns(&self.columns, self.name_width);
+        self.table.update(cx, |table, cx| table.set_columns(defs, cx));
+        self.table.update(cx, |table, cx| {
+            table.set_sorted(column_id(ColumnKind::Type), SortDir::Asc, cx);
+        });
+        cx.notify();
+    }
+
+    fn on_clear_selection(&mut self, _: &ClearSelection, _: &mut Window, cx: &mut Context<Self>) {
+        self.clear_table_selection(cx);
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
@@ -573,6 +614,9 @@ impl Render for ArchiveExplorer {
             .on_action(cx.listener(Self::on_toggle_attributes_column))
             .on_action(cx.listener(Self::on_toggle_crc_column))
             .on_action(cx.listener(Self::on_toggle_method_column))
+            .on_action(cx.listener(Self::on_toggle_type_column))
+            .on_action(cx.listener(Self::on_sort_by_type))
+            .on_action(cx.listener(Self::on_clear_selection))
             .drag_over::<ExternalPaths>(|el, _, _, cx| {
                 el.border_color(cx.theme().primary)
             })
@@ -667,6 +711,9 @@ fn row_context_menu(is_directory: bool, menu: PopupMenu) -> PopupMenu {
         })
         .separator()
         .menu("Properties", Box::new(app_action::ShowProperties))
+        .separator()
+        .menu("Sort by type", Box::new(SortByType))
+        .menu("Clear selection", Box::new(ClearSelection))
 }
 
 /// The header context menu: every data column with a check mark, toggling
@@ -674,14 +721,7 @@ fn row_context_menu(is_directory: bool, menu: PopupMenu) -> PopupMenu {
 /// the current arrangement.
 fn column_menu(columns: &[TableColumn<EntryRow>], menu: PopupMenu) -> PopupMenu {
     let mut menu = menu;
-    for kind in [
-        ColumnKind::Size,
-        ColumnKind::Packed,
-        ColumnKind::Modified,
-        ColumnKind::Attributes,
-        ColumnKind::Crc,
-        ColumnKind::Method,
-    ] {
+    for kind in model::ALL_COLUMN_KINDS {
         let id = column_id(kind);
         let visible = columns.iter().any(|column| column.identity() == id);
         let action: Box<dyn gpui::Action> = match kind {
@@ -691,6 +731,7 @@ fn column_menu(columns: &[TableColumn<EntryRow>], menu: PopupMenu) -> PopupMenu 
             ColumnKind::Attributes => ToggleAttributesColumn.boxed_clone(),
             ColumnKind::Crc => ToggleCrcColumn.boxed_clone(),
             ColumnKind::Method => ToggleMethodColumn.boxed_clone(),
+            ColumnKind::Type => ToggleTypeColumn.boxed_clone(),
         };
         menu = menu.menu_with_check(kind.title(), visible, action);
     }

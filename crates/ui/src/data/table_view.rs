@@ -65,7 +65,7 @@ pub enum TableViewEvent {
     ColumnsReordered,
 }
 
-type Comparator<T> = Rc<dyn Fn(&T, &T) -> Ordering>;
+type Comparator<T> = Rc<dyn Fn(&T, &T, SortDir) -> Ordering>;
 type CellBuilder<T> = Rc<dyn Fn(&T, &mut Window, &mut App) -> AnyElement>;
 type RowMenu = Rc<dyn Fn(PopupMenu, usize, &mut Window, &mut App) -> PopupMenu>;
 type HeaderMenu = Rc<dyn Fn(PopupMenu, &mut Window, &mut App) -> PopupMenu>;
@@ -154,10 +154,15 @@ impl<T> Column<T> {
         self
     }
 
-    /// Make the column sortable. A header click cycles ascending →
-    /// descending → unsorted; the sort is a stable reorder of display
-    /// indices and never mutates the rows.
-    pub fn sortable_by(mut self, cmp: impl Fn(&T, &T) -> Ordering + 'static) -> Self {
+    /// Make the column sortable. The comparator receives the direction: any
+    /// ordering invariants the host layers on top (e.g. "directories first")
+    /// must hold in both directions, and only the key itself flips. A header
+    /// click cycles ascending → descending → unsorted; the sort is a stable
+    /// reorder of display indices and never mutates the rows.
+    pub fn sortable_by(
+        mut self,
+        cmp: impl Fn(&T, &T, SortDir) -> Ordering + 'static,
+    ) -> Self {
         self.sort = Some(Rc::new(cmp));
         self
     }
@@ -664,6 +669,20 @@ impl<T: 'static> TableView<T> {
         }
     }
 
+    /// Set the sort programmatically (host commands like "sort by type").
+    /// Ignored when the column is absent or not sortable.
+    pub fn set_sorted(&mut self, id: u64, dir: SortDir, cx: &mut Context<Self>) {
+        if self
+            .columns
+            .iter()
+            .any(|column| column.id == id && column.sort.is_some())
+        {
+            self.sort = Some((id, dir));
+            cx.emit(TableViewEvent::Sorted(Some((id, dir))));
+            cx.notify();
+        }
+    }
+
     /// Keyboard facade for hosts holding focus above the table: moves the
     /// cursor like the Up/Down keys (`extend` = shift). Consumed moves stop
     /// propagation and scroll the cursor into view.
@@ -887,6 +906,10 @@ impl<T: 'static> TableView<T> {
                     view.update(app, |this, cx| {
                         window.focus(&this.focus, cx);
                         this.row_mouse_down(display, toggle, range, count, cx);
+                        // A row was hit: keep the list's empty-area handler
+                        // (which drops the selection) from also seeing this
+                        // press.
+                        cx.stop_propagation();
                     })
                     .ok();
                 }
@@ -925,6 +948,13 @@ impl<T: 'static> Render for TableView<T> {
 
         let header = self.render_header(cx);
 
+        // Pressing the list's empty area keeps focus and drops the
+        // selection, like a native file list; row presses stop propagation
+        // before reaching this handler.
+        let empty_click = cx.listener(|this, _ev, window, cx| {
+            window.focus(&this.focus, cx);
+            this.clear_selection(cx);
+        });
         let body: AnyElement = if count == 0 {
             match &self.empty {
                 Some(builder) => builder(window, cx),
@@ -946,6 +976,7 @@ impl<T: 'static> Render for TableView<T> {
                     this.render_rows(range, window, cx)
                 }),
             )
+            .on_mouse_down(MouseButton::Left, empty_click)
             .flex_1()
             .min_h_0()
             .w_full()
@@ -959,6 +990,7 @@ impl<T: 'static> Render for TableView<T> {
                     this.render_rows(range, window, cx)
                 }),
             )
+            .on_mouse_down(MouseButton::Left, empty_click)
             .h(px(height))
             .w_full()
             .track_scroll(&self.scroll.clone())
@@ -1060,14 +1092,16 @@ pub fn identity_order(len: usize) -> Vec<usize> {
 }
 
 /// A stable sort of row indices by `cmp`; the source slice is never mutated.
-/// `Desc` flips the comparator arguments (rather than reversing the result),
-/// so equal rows keep their source order in both directions.
-pub fn sorted_order<T>(rows: &[T], dir: SortDir, cmp: &dyn Fn(&T, &T) -> Ordering) -> Vec<usize> {
+/// The direction is handed to the comparator, so host-side invariants (such
+/// as grouping directories ahead of files) survive descending sorts, while
+/// equal rows keep their source order in both directions.
+pub fn sorted_order<T>(
+    rows: &[T],
+    dir: SortDir,
+    cmp: &dyn Fn(&T, &T, SortDir) -> Ordering,
+) -> Vec<usize> {
     let mut order = identity_order(rows.len());
-    order.sort_by(|&a, &b| match dir {
-        SortDir::Asc => cmp(&rows[a], &rows[b]),
-        SortDir::Desc => cmp(&rows[b], &rows[a]),
-    });
+    order.sort_by(|&a, &b| cmp(&rows[a], &rows[b], dir));
     order
 }
 
@@ -1272,18 +1306,39 @@ mod tests {
     #[test]
     fn sorted_order_never_touches_the_source() {
         let rows = vec![3, 1, 2];
-        let order = sorted_order(&rows, SortDir::Asc, &|a, b| a.cmp(b));
+        let order = sorted_order(&rows, SortDir::Asc, &|a, b, _| a.cmp(b));
         assert_eq!(order, vec![1, 2, 0]);
         assert_eq!(rows, vec![3, 1, 2]);
     }
 
     #[test]
     fn sorted_order_is_stable_in_both_directions() {
-        // Equal keys (by first tuple field) must keep source order.
+        // Equal keys (by first tuple field) must keep source order in both
+        // directions; the direction flips only the keys themselves.
         let rows = vec![(1, "a"), (0, "b"), (1, "c"), (0, "d")];
-        let cmp = |a: &(i32, &str), b: &(i32, &str)| a.0.cmp(&b.0);
+        let cmp = |a: &(i32, &str), b: &(i32, &str), dir: SortDir| match dir {
+            SortDir::Asc => a.0.cmp(&b.0),
+            SortDir::Desc => b.0.cmp(&a.0),
+        };
         assert_eq!(sorted_order(&rows, SortDir::Asc, &cmp), vec![1, 3, 0, 2]);
         assert_eq!(sorted_order(&rows, SortDir::Desc, &cmp), vec![0, 2, 1, 3]);
+    }
+
+    #[test]
+    fn sorted_order_hands_the_direction_to_the_comparator() {
+        // A host-style invariant comparator: odd numbers group first in BOTH
+        // directions; only the key flips.
+        let rows = vec![2, 1, 4, 3];
+        let cmp = |a: &i32, b: &i32, dir: SortDir| {
+            (b % 2)
+                .cmp(&(a % 2))
+                .then_with(|| match dir {
+                    SortDir::Asc => a.cmp(b),
+                    SortDir::Desc => b.cmp(a),
+                })
+        };
+        assert_eq!(sorted_order(&rows, SortDir::Asc, &cmp), vec![1, 3, 0, 2]);
+        assert_eq!(sorted_order(&rows, SortDir::Desc, &cmp), vec![3, 1, 2, 0]);
     }
 
     #[test]
@@ -1352,7 +1407,7 @@ mod tests {
         let column = |id: u64, sortable: bool| {
             let base = Column::<()>::new(format!("col-{id}")).id(id).width(80.0);
             if sortable {
-                base.sortable_by(|_: &(), _: &()| Ordering::Equal)
+                base.sortable_by(|_: &(), _: &(), _: SortDir| Ordering::Equal)
             } else {
                 base
             }

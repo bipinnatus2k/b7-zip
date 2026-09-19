@@ -4,6 +4,7 @@
 use session::ArchiveSession;
 use std::cmp::Ordering;
 use std::sync::{Arc, Mutex};
+use ui::data::table_view::SortDir;
 use vfs::attr;
 use vfs::{NodeId, Tree, VfsNode};
 
@@ -26,6 +27,9 @@ pub struct EntryRow {
     pub attributes: u32,
     pub crc: Option<u32>,
     pub method: String,
+    /// Lowercased extension without the dot (empty for directories and
+    /// extensionless names) — the sort-by-type key.
+    pub type_key: String,
 }
 
 /// Logical pixel widths of the table's fixed columns. The single source for
@@ -38,6 +42,7 @@ pub const MODIFIED_WIDTH: f32 = 118.0;
 pub const ATTRIBUTES_WIDTH: f32 = 70.0;
 pub const CRC_WIDTH: f32 = 74.0;
 pub const METHOD_WIDTH: f32 = 60.0;
+pub const TYPE_WIDTH: f32 = 64.0;
 
 /// Approximate horizontal padding a cell adds around its content (px_2 both
 /// sides), counted once per column when budgeting the table.
@@ -47,22 +52,26 @@ const CELL_PADDING: f32 = 16.0;
 /// container the content keeps this minimum and the table scrolls
 /// horizontally — columns are never compressed or hidden to fit.
 pub const TOTAL_TABLE_WIDTH: f32 = NAME_MIN_WIDTH
+    + TYPE_WIDTH
     + SIZE_WIDTH
     + PACKED_WIDTH
     + MODIFIED_WIDTH
     + ATTRIBUTES_WIDTH
     + CRC_WIDTH
     + METHOD_WIDTH
-    + CELL_PADDING * 7.0;
+    + CELL_PADDING * 8.0;
 
 /// Floor for every user-resizable column, so a drag cannot swallow content.
 pub const COLUMN_MIN_WIDTH: f32 = 40.0;
 
-/// The optional (non-Name) table columns: shown in the order they appear in
-/// the column list, resizable and hideable individually. The Name column is
-/// not part of this — it is always first and flexes to the remaining width.
+/// The optional (non-Name) table columns, in canonical display order — the
+/// order they appear in, in the header's show/hide menu, and the slot a
+/// hidden column returns to when re-shown. The Name column is not part of
+/// this — it is always first and flexes to the remaining width. `Type`
+/// sits right behind it, 7-Zip style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnKind {
+    Type,
     Size,
     Packed,
     Modified,
@@ -71,7 +80,8 @@ pub enum ColumnKind {
     Method,
 }
 
-pub const ALL_COLUMN_KINDS: [ColumnKind; 6] = [
+pub const ALL_COLUMN_KINDS: [ColumnKind; 7] = [
+    ColumnKind::Type,
     ColumnKind::Size,
     ColumnKind::Packed,
     ColumnKind::Modified,
@@ -80,10 +90,25 @@ pub const ALL_COLUMN_KINDS: [ColumnKind; 6] = [
     ColumnKind::Method,
 ];
 
+/// The columns a fresh table starts with: every column visible, in
+/// canonical order.
+pub const DEFAULT_COLUMN_KINDS: [ColumnKind; 7] = ALL_COLUMN_KINDS;
+
+/// The column's position in the canonical order. Display order, column
+/// identity ([`super::explorer`] maps this to the `TableView` id), the
+/// show/hide menu, and the re-show slot all derive from it.
+pub fn column_rank(kind: ColumnKind) -> usize {
+    ALL_COLUMN_KINDS
+        .iter()
+        .position(|candidate| *candidate == kind)
+        .unwrap_or(usize::MAX)
+}
+
 impl ColumnKind {
     /// Header caption.
     pub fn title(self) -> &'static str {
         match self {
+            ColumnKind::Type => "Type",
             ColumnKind::Size => "Size",
             ColumnKind::Packed => "Packed",
             ColumnKind::Modified => "Modified",
@@ -96,6 +121,7 @@ impl ColumnKind {
     /// Width a fresh column starts at.
     pub fn default_width(self) -> f32 {
         match self {
+            ColumnKind::Type => TYPE_WIDTH,
             ColumnKind::Size => SIZE_WIDTH,
             ColumnKind::Packed => PACKED_WIDTH,
             ColumnKind::Modified => MODIFIED_WIDTH,
@@ -113,9 +139,9 @@ pub struct Column {
     pub width: f32,
 }
 
-/// The initial column set: every column visible at its default width.
+/// The initial column set: every default column visible at its width.
 pub fn default_columns() -> Vec<Column> {
-    ALL_COLUMN_KINDS
+    DEFAULT_COLUMN_KINDS
         .iter()
         .copied()
         .map(|kind| Column {
@@ -137,15 +163,20 @@ pub fn total_table_width(columns: &[Column], name_width: Option<f32>) -> f32 {
 
 /// Wraps a column-key comparator with the file-manager invariants: sorted
 /// rows keep directories ahead of files regardless of key or direction, and
-/// equal keys fall back to the natural name order. Every sortable column the
-/// table registers goes through this.
+/// equal keys fall back to the natural name order. The direction applies to
+/// the key only — the grouping and the name fallback stay ascending, so ties
+/// keep the same relative order in both directions. Every sortable column
+/// the table registers goes through this.
 pub fn dirs_first(
     key: impl Fn(&EntryRow, &EntryRow) -> std::cmp::Ordering,
-) -> impl Fn(&EntryRow, &EntryRow) -> std::cmp::Ordering {
-    move |a, b| {
+) -> impl Fn(&EntryRow, &EntryRow, SortDir) -> std::cmp::Ordering {
+    move |a, b, dir| {
         b.is_directory
             .cmp(&a.is_directory)
-            .then_with(|| key(a, b))
+            .then_with(|| match dir {
+                SortDir::Asc => key(a, b),
+                SortDir::Desc => key(b, a),
+            })
             .then_with(|| natural_cmp(&a.name, &b.name))
     }
 }
@@ -228,6 +259,32 @@ pub fn row_of(tree: &Tree, current_path: &str, node: &VfsNode, id: NodeId) -> En
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        type_key: if node.is_directory {
+            String::new()
+        } else {
+            extension_key(&node.name)
+        },
+    }
+}
+
+/// Lowercased extension of `name` without the leading dot; empty when the
+/// name carries none.
+pub fn extension_key(name: &str) -> String {
+    std::path::Path::new(name)
+        .extension()
+        .map(|ext| ext.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Human-readable type cell: `Folder`, the uppercased extension, or `File`
+/// when the name carries none.
+pub fn type_label(row: &EntryRow) -> String {
+    if row.is_directory {
+        return "Folder".into();
+    }
+    match std::path::Path::new(&row.name).extension() {
+        Some(ext) if !ext.is_empty() => ext.to_string_lossy().to_uppercase(),
+        _ => "File".into(),
     }
 }
 
@@ -355,7 +412,29 @@ mod tests {
             attributes: 0,
             crc: None,
             method: String::new(),
+            type_key: if is_directory {
+                String::new()
+            } else {
+                extension_key(name)
+            },
         }
+    }
+
+    #[test]
+    fn type_key_and_label_follow_the_extension() {
+        assert_eq!(extension_key("readme.TXT"), "txt");
+        assert_eq!(extension_key("archive.tar.gz"), "gz");
+        assert_eq!(extension_key("Makefile"), "");
+        assert_eq!(type_label(&row("notes.txt", 0, false)), "TXT");
+        assert_eq!(type_label(&row("notes", 0, false)), "File");
+        assert_eq!(type_label(&row("docs/", 0, true)), "Folder");
+        // Grouping is by extension, case-insensitively; equal keys fall
+        // through to the name.
+        let by_type = dirs_first(|a: &EntryRow, b: &EntryRow| a.type_key.cmp(&b.type_key));
+        let mut rows = vec![row("b.txt", 1, false), row("A.TXT", 2, false)];
+        rows.sort_by(|a, b| by_type(a, b, SortDir::Asc));
+        assert_eq!(rows[0].name, "A.TXT");
+        assert_eq!(rows[1].name, "b.txt");
     }
 
     #[test]
@@ -389,14 +468,25 @@ mod tests {
     #[test]
     fn total_table_width_covers_every_column() {
         let columns = NAME_MIN_WIDTH
+            + TYPE_WIDTH
             + SIZE_WIDTH
             + PACKED_WIDTH
             + MODIFIED_WIDTH
             + ATTRIBUTES_WIDTH
             + CRC_WIDTH
             + METHOD_WIDTH;
-        assert_eq!(TOTAL_TABLE_WIDTH, columns + CELL_PADDING * 7.0);
+        assert_eq!(TOTAL_TABLE_WIDTH, columns + CELL_PADDING * 8.0);
         assert!(TOTAL_TABLE_WIDTH > columns, "the budget includes cell padding");
+    }
+
+    #[test]
+    fn canonical_order_puts_type_right_after_the_name() {
+        assert_eq!(ALL_COLUMN_KINDS[0], ColumnKind::Type);
+        assert_eq!(column_rank(ColumnKind::Type), 0);
+        assert_eq!(column_rank(ColumnKind::Method), ALL_COLUMN_KINDS.len() - 1);
+        // A fresh table shows every column, so display order == canonical
+        // order.
+        assert_eq!(DEFAULT_COLUMN_KINDS, ALL_COLUMN_KINDS);
     }
 
     #[test]
@@ -421,9 +511,27 @@ mod tests {
             row("z/", 0, true),
             row("a.txt", 10, false),
         ];
-        rows.sort_by(|a, b| by_size(a, b));
+        rows.sort_by(|a, b| by_size(a, b, SortDir::Asc));
         assert_eq!(rows[0].name, "z/");
         assert_eq!(rows[1].name, "b.txt");
         assert_eq!(rows[2].name, "a.txt");
+    }
+
+    // Regression: descending sorts used to flip the whole comparator,
+    // pushing directories behind the files.
+    #[test]
+    fn dirs_first_keeps_directories_ahead_of_files_when_descending() {
+        let by_size = dirs_first(|a: &EntryRow, b: &EntryRow| a.size.cmp(&b.size));
+        let mut rows = vec![
+            row("b.txt", 2, false),
+            row("z/", 0, true),
+            row("a.txt", 10, false),
+        ];
+        rows.sort_by(|a, b| by_size(a, b, SortDir::Desc));
+        assert_eq!(rows[0].name, "z/");
+        // Files follow by descending size; the equal-key name fallback stays
+        // ascending.
+        assert_eq!(rows[1].name, "a.txt");
+        assert_eq!(rows[2].name, "b.txt");
     }
 }
