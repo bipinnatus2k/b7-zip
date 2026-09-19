@@ -112,6 +112,44 @@ pub fn checksum_file(path: impl AsRef<Path>, algorithm: ChecksumAlgorithm) -> io
     })
 }
 
+/// Compute digests for several algorithms over a **single** read pass of the
+/// file. A multi-algorithm listing must not reread the file per algorithm —
+/// for large selections that multiplies I/O by the algorithm count.
+pub fn checksum_file_multi(
+    path: impl AsRef<Path>,
+    algorithms: &[ChecksumAlgorithm],
+) -> io::Result<Vec<ChecksumResult>> {
+    let path = path.as_ref();
+    let mut file = std::fs::File::open(path)?;
+    let mut hashers: Vec<(ChecksumAlgorithm, Box<dyn IncrementalHasher>)> = algorithms
+        .iter()
+        .copied()
+        .map(|algorithm| (algorithm, new_hasher(algorithm)))
+        .collect();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        for (_, hasher) in &mut hashers {
+            hasher.update(&buffer[..n]);
+        }
+    }
+    let path = path.display().to_string();
+    Ok(hashers
+        .into_iter()
+        .map(|(algorithm, hasher)| ChecksumResult {
+            path: path.clone(),
+            size: total,
+            algorithm,
+            digest: hasher.finalize_hex(),
+        })
+        .collect())
+}
+
 struct Crc32Hasher(crc32fast::Hasher);
 impl IncrementalHasher for Crc32Hasher {
     fn update(&mut self, data: &[u8]) { self.0.update(data); }
@@ -235,5 +273,30 @@ mod tests {
         let result = checksum_file(&path, ChecksumAlgorithm::Sha1).unwrap();
         assert_eq!(result.size, 14);
         assert_eq!(result.digest, checksum_bytes(b"hello tempfile", ChecksumAlgorithm::Sha1));
+    }
+
+    #[test]
+    fn multi_pass_matches_single_algorithm_results() {
+        let all = [
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc64,
+            ChecksumAlgorithm::Md5,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+            ChecksumAlgorithm::Sha512,
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.bin");
+        std::fs::write(&path, b"one read, many digests").unwrap();
+        let multi = checksum_file_multi(&path, &all).unwrap();
+        assert_eq!(multi.len(), all.len());
+        for (algorithm, result) in all.iter().zip(&multi) {
+            assert_eq!(result.algorithm, *algorithm);
+            assert_eq!(result.size, 22);
+            assert_eq!(
+                result.digest,
+                checksum_file(&path, *algorithm).unwrap().digest
+            );
+        }
     }
 }
