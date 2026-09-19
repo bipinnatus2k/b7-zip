@@ -29,6 +29,31 @@ pub use report::report_pending;
 const CRASH_HANDLER_PING_TIMEOUT: Duration = Duration::from_secs(60);
 const CRASH_HANDLER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Removes `zed-crash-handler-*` artifacts left behind by previous runs —
+/// every launch creates one (a socket file or directory) and nothing ever
+/// cleaned them up. Best-effort: a live instance's artifact holds an open
+/// handle, so its removal simply fails and is ignored. Call before
+/// installing this process's own handler.
+pub fn cleanup_stale_handler_dirs(base: &Path) {
+    let Ok(entries) = std::fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("zed-crash-handler-")
+        {
+            continue;
+        }
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let _ = std::fs::remove_dir_all(entry.path());
+        } else {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Force a backtrace to be printed on panic.
 pub fn force_backtrace() {
     let old_hook = panic::take_hook();
