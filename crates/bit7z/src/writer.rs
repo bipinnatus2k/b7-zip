@@ -116,14 +116,21 @@ impl ArchiveWriter {
         if raw.is_null() {
             Err("failed to create writer".into())
         } else {
-            Ok(Self {
+            let writer = Self {
                 raw: BitArchiveHandle::from_raw(raw),
-            })
+            };
+            // bit7z omits timestamps unless asked; 7-Zip itself always stores
+            // mtimes, so match it (creation/access times stay off — noise for
+            // a copy).
+            writer.set_store_timestamps(true, false, false);
+            Ok(writer)
         }
     }
 
     pub unsafe fn from_raw(raw: BitArchiveHandle) -> Self {
-        Self { raw }
+        let writer = Self { raw };
+        writer.set_store_timestamps(true, false, false);
+        writer
     }
 
     pub fn open(
@@ -145,9 +152,11 @@ impl ArchiveWriter {
         if raw.is_null() {
             Err("failed to open writer".into())
         } else {
-            Ok(Self {
+            let writer = Self {
                 raw: BitArchiveHandle::from_raw(raw),
-            })
+            };
+            writer.set_store_timestamps(true, false, false);
+            Ok(writer)
         }
     }
 

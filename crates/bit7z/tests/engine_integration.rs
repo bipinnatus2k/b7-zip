@@ -375,3 +375,46 @@ fn archive_comment_roundtrip() {
         .expect("compress 7z");
     assert_eq!(engine.archive_comment(&sevenzip, None).unwrap(), None);
 }
+
+// Regression: item properties (mtime/attributes/method) used to read empty
+// because the FFI handed Rust a `BitArchiveItem*` into a temporary vector —
+// every property read through it was use-after-free.
+#[test]
+fn listed_entries_carry_mtimes_attributes_and_method() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("doc.txt");
+    std::fs::write(&src, "property body").unwrap();
+    let archive = dir.path().join("props.7z");
+    engine
+        .compress(&[src], &archive, &CompressOptions::default())
+        .expect("compress");
+
+    let entries = engine.list(&archive, None).expect("list");
+    let entry = entries
+        .iter()
+        .find(|e| e.name == "doc.txt")
+        .expect("file entry listed");
+
+    let mtime = entry
+        .modified
+        .expect("mtime must be stored (writer) and read (reader)");
+    assert!(
+        mtime.year() >= 2024,
+        "mtime should be near the current date, got {mtime}"
+    );
+
+    let attributes = entry.attributes.expect("windows attributes present");
+    assert_ne!(attributes, 0, "a fresh file carries the archive bit");
+
+    let method = entry
+        .compression_method
+        .as_deref()
+        .expect("7z stores a per-item method");
+    assert!(!method.is_empty(), "method string must be non-empty");
+}
