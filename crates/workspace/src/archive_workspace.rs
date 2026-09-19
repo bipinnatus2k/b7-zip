@@ -10,7 +10,7 @@ use app_action::{
     SelectAllEntries, ShowProperties, StageSelected, TestActiveArchive, ToggleChanges,
     UnstageSelected,
 };
-use compare::{DiffReport, tree_vs_tree};
+use compare::tree_vs_tree;
 use explorer::explorer::{ArchiveExplorer, ExplorerCommand, ExplorerEvent};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -27,7 +27,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable as _, Icon, IconName, Selectable as _, Sizable, WindowExt,
 };
 use session::{ArchiveSession, ChangeEntry, next_archive_id};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use task::{JobSpec, OverwriteSpec, TaskRunner};
@@ -48,6 +48,28 @@ const CHECKSUM_ALGORITHMS: [checksum::ChecksumAlgorithm; 6] = [
     checksum::ChecksumAlgorithm::Sha256,
     checksum::ChecksumAlgorithm::Sha512,
 ];
+
+/// Cheap digest of the overlay's change state: working-tree size, staged
+/// count, and an order-independent fold over the dirty map (HashMap iteration
+/// order must not move the digest). Any add/delete/rename/stage/commit
+/// changes it, so the sidebar tree cache rebuilds only when the overlay
+/// actually changed instead of on every watch tick.
+fn overlay_fingerprint(session: &ArchiveSession) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let overlay = session.overlay();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    overlay.working().len().hash(&mut hasher);
+    overlay.staged().len().hash(&mut hasher);
+    let mut folded: u64 = 0;
+    for (&id, &state) in overlay.dirty() {
+        let mut entry = std::collections::hash_map::DefaultHasher::new();
+        id.hash(&mut entry);
+        (state as u8).hash(&mut entry);
+        folded = folded.wrapping_add(entry.finish());
+    }
+    folded.hash(&mut hasher);
+    hasher.finish()
+}
 
 pub struct ArchiveWorkspace {
     focus_handle: FocusHandle,
@@ -82,6 +104,9 @@ pub struct ArchiveWorkspace {
     /// whenever the session lock happens to be free (bind / poll ticks),
     /// never on the render path.
     tree_rows: Vec<TreeRow>,
+    /// Digest of the overlay change state `tree_rows` was built from; a
+    /// poll tick skips the rebuild while it is unchanged.
+    tree_fingerprint: u64,
     /// The archive-level comment (ZIP etc.), fetched in the background after
     /// open / password supply / commit; `None` when there is none (yet).
     comment: Option<String>,
@@ -183,6 +208,7 @@ impl ArchiveWorkspace {
             changes_scroll: UniformListScrollHandle::new(),
             changes_cache: Vec::new(),
             tree_rows: Vec::new(),
+            tree_fingerprint: 0,
             comment: None,
             window: None,
             _subscriptions: subscriptions,
@@ -232,6 +258,7 @@ impl ArchiveWorkspace {
                 changes_scroll: UniformListScrollHandle::new(),
                 changes_cache: Vec::new(),
                 tree_rows: Vec::new(),
+                tree_fingerprint: 0,
                 comment: None,
                 window: Some(window.window_handle()),
                 _subscriptions: subscriptions,
@@ -478,10 +505,16 @@ impl ArchiveWorkspace {
                 // thread; keep the last known value meanwhile — `after_write`
                 // refreshes again once the commit lands.
                 match session.try_lock() {
-                    // The lock is free: also refresh the sidebar tree cache,
-                    // which shares the same lock-avoidance story.
+                    // The lock is free: refresh the sidebar tree cache too,
+                    // but only when the overlay actually changed — the watch
+                    // poll outruns the data by design and must not pay a
+                    // full-tree walk every tick.
                     Ok(mut session) => {
-                        self.rebuild_tree_from(&session);
+                        let fingerprint = overlay_fingerprint(&session);
+                        if fingerprint != self.tree_fingerprint {
+                            self.rebuild_tree_from(&session);
+                            self.tree_fingerprint = fingerprint;
+                        }
                         session.has_changes()
                     }
                     Err(_) => return,
@@ -502,6 +535,7 @@ impl ArchiveWorkspace {
             return;
         };
         let session = session.lock().expect("session lock poisoned");
+        self.tree_fingerprint = overlay_fingerprint(&session);
         self.rebuild_tree_from(&session);
     }
 
@@ -574,15 +608,21 @@ impl ArchiveWorkspace {
         };
         let weak = cx.weak_entity();
         cx.spawn(async move |_, cx| {
-        let comment = cx
-            .background_executor()
-            .spawn(async move {
-                let session = session.lock().expect("session lock poisoned");
-                session.comment()
-            })
-            .await;
+            let comment = cx
+                .background_executor()
+                .spawn(async move {
+                    // `try_lock`: a running commit holds this mutex for its
+                    // whole duration; skip instead of parking a worker
+                    // thread — the comment is fetched again once it lands.
+                    let session = session.try_lock().ok()?;
+                    Some(session.comment().ok().flatten())
+                })
+                .await;
+            let Some(comment) = comment else {
+                return;
+            };
             let _ = weak.update(cx, |this, cx| {
-                this.comment = comment.ok().flatten().filter(|c| !c.trim().is_empty());
+                this.comment = comment.filter(|c| !c.trim().is_empty());
                 cx.notify();
             });
         })
@@ -1140,20 +1180,29 @@ impl ArchiveWorkspace {
                         };
                         match extracted {
                             Ok(path) => {
+                                // One read pass feeds every hasher; the
+                                // naive loop reread the file per algorithm.
                                 let digests: Vec<(SharedString, SharedString)> =
-                                    CHECKSUM_ALGORITHMS
-                                        .iter()
-                                        .copied()
-                                        .map(|algorithm| {
-                                            let label = SharedString::from(algorithm.name());
-                                            match checksum::checksum_file(&path, algorithm) {
-                                                Ok(result) => (label, result.digest.into()),
-                                                Err(err) => {
-                                                    (label, format!("error: {err}").into())
-                                                }
-                                            }
-                                        })
-                                        .collect();
+                                    match checksum::checksum_file_multi(
+                                        &path,
+                                        &CHECKSUM_ALGORITHMS,
+                                    ) {
+                                        Ok(results) => results
+                                            .into_iter()
+                                            .map(|result| {
+                                                (
+                                                    SharedString::from(
+                                                        result.algorithm.name(),
+                                                    ),
+                                                    result.digest.into(),
+                                                )
+                                            })
+                                            .collect(),
+                                        Err(err) => vec![(
+                                            "Error".into(),
+                                            format!("read failed: {err}").into(),
+                                        )],
+                                    };
                                 results.push((name, digests));
                             }
                             Err(err) => {
