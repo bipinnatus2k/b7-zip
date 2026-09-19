@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository.
 
 ## What this is
 
-**Bit7zFM** — a 7-Zip/WinRAR-class archive manager for Windows, built on GPUI (the `gpui-pre` fork of zed's gpui, 0.3.4, plus `gpui-kit`) and the bit7z C++ library via a hand-written FFI bridge. Rust workspace, edition 2024, resolver 3. `README.md` has the full component table, but its UI-stack description is partly stale — see "Refactor in flight" below.
+**Bit7zFM** — a 7-Zip/WinRAR-class archive manager for Windows, built on GPUI (the `gpui-pre` fork of zed's gpui, 0.3.4, plus `gpui-kit`) and the bit7z C++ library via a hand-written FFI bridge. Rust workspace, edition 2024, resolver 3. `README.md` has the full component table, but its UI-stack description is partly stale — see "Refactor in flight" below. Phase history and the pending feature backlog live in `docs/ROADMAP.md`.
 
 ## Build, check, test
 
