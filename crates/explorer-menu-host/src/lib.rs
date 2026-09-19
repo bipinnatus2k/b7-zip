@@ -79,16 +79,7 @@ fn archive_extensions() -> &'static Vec<String> {
 }
 
 fn all_archives(selection: Option<&Selection>) -> bool {
-    selection.is_some_and(|sel| {
-        !sel.is_empty()
-            && sel.paths().iter().all(|p| {
-                p.is_file()
-                    && p.extension().is_some_and(|ext| {
-                        archive_extensions()
-                            .contains(&ext.to_string_lossy().to_lowercase())
-                    })
-            })
-    })
+    selection.is_some_and(|sel| !sel.is_empty() && sel.paths().iter().all(|p| is_archive_path(p)))
 }
 
 fn any_selection(selection: Option<&Selection>) -> bool {
@@ -109,6 +100,24 @@ fn stem_of(path: &Path) -> String {
     path.file_stem()
         .map(|stem| stem.to_string_lossy().to_string())
         .unwrap_or_else(|| "archive".into())
+}
+
+fn is_archive_path(path: &Path) -> bool {
+    path.is_file()
+        && path.extension().is_some_and(|ext| {
+            archive_extensions().contains(&ext.to_string_lossy().to_lowercase())
+        })
+}
+
+fn compress_target_stem(path: &Path) -> String {
+    // Recompressing a single archive to its own path would overwrite the
+    // input while it is being read (the output stream is truncated first),
+    // so the mirror of the legacy shell extension appends `_new`.
+    if is_archive_path(path) {
+        format!("{}_new", stem_of(path))
+    } else {
+        stem_of(path)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +243,7 @@ impl MenuAction for CompressTo {
     fn title(&self, selection: Option<&Selection>) -> String {
         let stem = selection
             .and_then(Selection::first)
-            .map(|path| stem_of(path))
+            .map(|path| compress_target_stem(path))
             .unwrap_or_else(|| "archive".into());
         format!("Add to \"{stem}.{}\"", self.extension)
     }
@@ -255,7 +264,7 @@ impl MenuAction for CompressTo {
         let mut target = parent_of(first);
         target.push(format!(
             "{}.{}",
-            stem_of(first),
+            compress_target_stem(first),
             self.extension
         ));
         launch_job(JobSpec::Compress {

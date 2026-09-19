@@ -3,9 +3,32 @@
 
 use crate::job::{JobSpec, OverwriteSpec};
 use bit7z_rs::{ArchiveEngine, CompressOptions, EngineOp, ExtractOptions, OverwriteMode};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
+
+/// Refuses a compress job whose target file is one of its own inputs: the
+/// writer truncates the target before reading the inputs, which would
+/// destroy that input. Callers usually prevent this (the shell verbs append
+/// `_new`, the CLI rejects explicitly); this is the last line of defense.
+fn ensure_compress_target_not_input(inputs: &[std::path::PathBuf], target: &Path) -> Result<(), bit7z_rs::ArchiveError> {
+    let Ok(target) = target.canonicalize() else {
+        // A missing target cannot clobber anything yet.
+        return Ok(());
+    };
+    for input in inputs {
+        if let Ok(input) = input.canonicalize()
+            && input == target
+        {
+            return Err(bit7z_rs::ArchiveError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "compress target would overwrite its own input",
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Events emitted while a task runs.
 #[derive(Debug, Clone)]
@@ -209,6 +232,7 @@ fn run_job_with_pause(
             encrypt_headers,
             ..
         } => {
+            ensure_compress_target_not_input(inputs, target)?;
             let progress = {
                 let tx = tx.clone();
                 Arc::new(move |processed: u64, total: u64| {
@@ -359,3 +383,54 @@ pub fn changeset_to_ops(changeset: &vfs::Changeset) -> Vec<EngineOp> {
 
 /// A shared cancellation flag for long-running jobs.
 pub type CancelFlag = Arc<AtomicBool>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "b7zfm-runner-test-{}-{}",
+            tag,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn compress_target_matching_an_input_is_rejected() {
+        let dir = scratch_dir("self-overwrite");
+        let input = dir.join("foo.7z");
+        fs::write(&input, b"payload").unwrap();
+
+        let err = ensure_compress_target_not_input(&[input.clone()], &input);
+        assert!(err.is_err());
+
+        // Same file spelled with different casing must still be caught.
+        let dotted = dir.join("FOO.7z");
+        assert!(ensure_compress_target_not_input(&[input.clone()], &dotted).is_err());
+
+        // A distinct target is fine.
+        let other = dir.join("bar.7z");
+        assert!(ensure_compress_target_not_input(&[input], &other).is_ok());
+
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn compress_target_that_does_not_exist_yet_is_allowed() {
+        let dir = scratch_dir("missing-target");
+        let input = dir.join("foo.txt");
+        fs::write(&input, b"payload").unwrap();
+        assert!(
+            ensure_compress_target_not_input(&[input], &dir.join("new.7z")).is_ok()
+        );
+        fs::remove_dir_all(dir).ok();
+    }
+}
