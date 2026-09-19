@@ -34,7 +34,6 @@ void* (*force_bit7z_item_is_symlink)(void) = (void* (*)(void)) &bit7z_item_is_sy
 void* (*force_bit7z_item_posix_attrib)(void) = (void* (*)(void)) &bit7z_item_posix_attrib;
 void* (*force_bit7z_item_extension)(void) = (void* (*)(void)) &bit7z_item_extension;
 void* (*force_bit7z_item_hardlink)(void) = (void* (*)(void)) &bit7z_item_hardlink;
-void* (*force_bit7z_item_from_reader)(void) = (void* (*)(void)) &bit7z_item_from_reader;
 void* (*force_bit7z_reader_extract_to)(void) = (void* (*)(void)) &bit7z_reader_extract_to;
 void* (*force_bit7z_reader_extract_item_to_buffer)(void) = (void* (*)(void)) &bit7z_reader_extract_item_to_buffer;
 void* (*force_bit7z_reader_free_buffer)(void) = (void* (*)(void)) &bit7z_reader_free_buffer;

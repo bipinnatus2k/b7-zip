@@ -110,10 +110,10 @@ extern "C" inline uint32_t bit7z_item_crc(void* reader_ptr, uint32_t index) {
         return static_cast<bit7z::BitArchiveReader*>(reader_ptr)->items()[index].crc();
     } catch (...) { return 0; }
 }
-extern "C" inline int32_t bit7z_item_crc_defined(void* ptr) {
+extern "C" inline int32_t bit7z_item_crc_defined(void* reader_ptr, uint32_t index) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        return item->itemProperty(ArchiveProperties::CRC).isEmpty() ? 0 : 1;
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        return reader->itemProperty(index, ArchiveProperties::CRC).isEmpty() ? 0 : 1;
     } catch (...) { return 0; }
 }
 
@@ -128,115 +128,130 @@ inline int32_t tstring_to_utf8(const bit7z::tstring& src, char* out_buf, uint32_
     return (int32_t)len;
 }
 
-// ===== Item property wrappers (direct BitArchiveItem pointer) =====
+// ===== Item property wrappers =====
+//
+// All property reads go through `BitArchiveReader::itemProperty(index, ...)`
+// against the live archive. They must NOT hold a `BitArchiveItem*` across
+// calls: `items()` returns a temporary `std::vector<BitArchiveItemInfo>`, so
+// any pointer handed out of an expression dangles once that vector dies
+// (the old `bit7z_item_from_reader` did exactly that — every property read
+// through it was use-after-free and silently produced empty values).
 
-extern "C" inline uint64_t bit7z_item_mtime(void* ptr) {
+// FILETIME (100ns since 1601) → Unix seconds since 1970.
+inline uint64_t filetime_to_unix_seconds(const FILETIME& ft) {
+    auto quanta = (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+    if (quanta < 116444736000000000ull) {
+        return 0;
+    }
+    return (quanta - 116444736000000000ull) / 10000000ull;
+}
+
+inline uint64_t filetime_property(const bit7z::BitInputArchive& reader, uint32_t index, bit7z::BitProperty property) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto tp = item->lastWriteTime();
-        return static_cast<uint64_t>(std::chrono::system_clock::to_time_t(tp));
+        auto prop = reader.itemProperty(index, property);
+        if (!prop.isFileTime()) {
+            return 0;
+        }
+        return filetime_to_unix_seconds(prop.getFileTime());
     } catch (...) { return 0; }
 }
 
-extern "C" inline uint64_t bit7z_item_ctime(void* ptr) {
+extern "C" inline uint64_t bit7z_item_mtime(void* reader_ptr, uint32_t index) {
+    return filetime_property(*static_cast<bit7z::BitArchiveReader*>(reader_ptr), index, bit7z::BitProperty::MTime);
+}
+
+extern "C" inline uint64_t bit7z_item_ctime(void* reader_ptr, uint32_t index) {
+    return filetime_property(*static_cast<bit7z::BitArchiveReader*>(reader_ptr), index, bit7z::BitProperty::CTime);
+}
+
+extern "C" inline uint64_t bit7z_item_atime(void* reader_ptr, uint32_t index) {
+    return filetime_property(*static_cast<bit7z::BitArchiveReader*>(reader_ptr), index, bit7z::BitProperty::ATime);
+}
+
+extern "C" inline uint32_t bit7z_item_attributes(void* reader_ptr, uint32_t index) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto tp = item->creationTime();
-        return static_cast<uint64_t>(std::chrono::system_clock::to_time_t(tp));
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::Attrib);
+        return prop.isEmpty() ? 0u : prop.getUInt32();
     } catch (...) { return 0; }
 }
 
-extern "C" inline uint64_t bit7z_item_atime(void* ptr) {
+extern "C" inline uint8_t bit7z_item_host_os(void* reader_ptr, uint32_t index) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto tp = item->lastAccessTime();
-        return static_cast<uint64_t>(std::chrono::system_clock::to_time_t(tp));
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::HostOS);
+        return prop.isEmpty() ? 0u : prop.getUInt8();
     } catch (...) { return 0; }
 }
 
-extern "C" inline uint32_t bit7z_item_attributes(void* ptr) {
+extern "C" inline int32_t bit7z_item_compression_method(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        return item->attributes();
-    } catch (...) { return 0; }
-}
-
-extern "C" inline uint8_t bit7z_item_host_os(void* ptr) {
-    try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        return item->itemProperty(bit7z::BitProperty::HostOS).getUInt8();
-    } catch (...) { return 0; }
-}
-
-extern "C" inline int32_t bit7z_item_compression_method(void* ptr, char* out_buf, uint32_t buf_size) {
-    try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto prop = item->itemProperty(bit7z::BitProperty::Method).getString();
-        return tstring_to_utf8(prop, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::Method);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-extern "C" inline int32_t bit7z_item_comment(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_comment(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto prop = item->itemProperty(bit7z::BitProperty::Comment).getString();
-        return tstring_to_utf8(prop, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::Comment);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-extern "C" inline int32_t bit7z_item_user(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_user(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto prop = item->itemProperty(bit7z::BitProperty::User).getString();
-        return tstring_to_utf8(prop, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::User);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-extern "C" inline int32_t bit7z_item_group(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_group(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto prop = item->itemProperty(bit7z::BitProperty::Group).getString();
-        return tstring_to_utf8(prop, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::Group);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-extern "C" inline int32_t bit7z_item_is_symlink(void* ptr) {
+extern "C" inline int32_t bit7z_item_is_symlink(void* reader_ptr, uint32_t index) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        return item->isSymLink() ? 1 : 0;
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::SymLink);
+        return (!prop.isEmpty() && prop.getBool()) ? 1 : 0;
     } catch (...) { return 0; }
 }
 
-extern "C" inline uint32_t bit7z_item_posix_attrib(void* ptr) {
+extern "C" inline uint32_t bit7z_item_posix_attrib(void* reader_ptr, uint32_t index) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        return item->itemProperty(bit7z::BitProperty::PosixAttrib).getUInt32();
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::PosixAttrib);
+        return prop.isEmpty() ? 0u : prop.getUInt32();
     } catch (...) { return 0; }
 }
 
-extern "C" inline int32_t bit7z_item_extension(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_extension(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto ext = item->extension();
-        return tstring_to_utf8(ext, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, bit7z::BitProperty::Extension);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
 }
 
-
-extern "C" inline int32_t bit7z_item_hardlink(void* ptr, char* out_buf, uint32_t buf_size) {
+extern "C" inline int32_t bit7z_item_hardlink(void* reader_ptr, uint32_t index, char* out_buf, uint32_t buf_size) {
     try {
-        auto* item = static_cast<bit7z::BitArchiveItem*>(ptr);
-        auto prop = item->itemProperty(ArchiveProperties::HardLink).getString();
-        return tstring_to_utf8(prop, out_buf, buf_size);
+        auto* reader = static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader->itemProperty(index, ArchiveProperties::HardLink);
+        auto value = prop.isEmpty() ? bit7z::tstring{} : prop.getString();
+        return tstring_to_utf8(value, out_buf, buf_size);
     } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
-}
-
-// Retrieve raw BitArchiveItem* from reader + index (for property wrappers above)
-extern "C" inline void* bit7z_item_from_reader(void* reader_ptr, uint32_t index) {
-    try {
-        auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
-        return (void*)&reader.items()[index];
-    } catch (...) { return nullptr; }
 }
 
 // ===== Extract wrappers =====
@@ -358,10 +373,9 @@ extern "C" inline void* bit7z_reader_test_to_cb(
             uint32_t idx = (*fileIndex)++;
             uint64_t fileSize = 0;
             if (idx < reader.itemsCount()) {
-                auto itemPtr = bit7z_item_from_reader(&reader, idx);
-                if (itemPtr) {
-                    auto* item = static_cast<bit7z::BitArchiveItem*>(itemPtr);
-                    fileSize = item->size();
+                auto prop = reader.itemProperty(idx, bit7z::BitProperty::Size);
+                if (!prop.isEmpty()) {
+                    fileSize = prop.getUInt64();
                 }
             }
             if (on_progress) {
@@ -989,12 +1003,12 @@ inline int32_t bit7z_reader_extract_to_cb(
                 uint64_t fileSize = 0;
                 int64_t srcMtime = 0;
                 if (idx < count) {
-                    auto itemPtr = bit7z_item_from_reader(&reader, indices[idx]);
-                    if (itemPtr) {
-                        auto* item = static_cast<bit7z::BitArchiveItem*>(itemPtr);
-                        fileSize = item->size();
-                        srcMtime = static_cast<int64_t>(std::chrono::system_clock::to_time_t(item->lastWriteTime()));
+                    auto sizeProp = reader.itemProperty(indices[idx], bit7z::BitProperty::Size);
+                    if (!sizeProp.isEmpty()) {
+                        fileSize = sizeProp.getUInt64();
                     }
+                    srcMtime = static_cast<int64_t>(
+                        filetime_property(reader, indices[idx], bit7z::BitProperty::MTime));
                 }
 
                 // File-level progress: 7-Zip's byte-level completed value is

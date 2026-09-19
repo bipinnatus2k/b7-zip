@@ -375,55 +375,39 @@ impl ArchiveEngine for Bit7zEngine {
                 let crc = unsafe { bit7z_ffi::bit7z_item_list_crc(raw, i) };
                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
 
-                // Per-item deep properties via the raw BitArchiveItem pointer.
-                let item_ptr = unsafe {
-                    bit7z_ffi::bit7z_item_from_reader(reader.raw_handle().as_ptr(), index)
+                // Per-item deep properties, read straight from the live
+                // archive by index (an item pointer handed out of
+                // `items()` would dangle — it lives inside a temporary).
+                let reader_ptr = reader.raw_handle().as_ptr();
+                let modified = epoch_to_datetime(unsafe {
+                    bit7z_ffi::bit7z_item_mtime(reader_ptr, index)
+                });
+                let created = epoch_to_datetime(unsafe {
+                    bit7z_ffi::bit7z_item_ctime(reader_ptr, index)
+                });
+                let accessed = epoch_to_datetime(unsafe {
+                    bit7z_ffi::bit7z_item_atime(reader_ptr, index)
+                });
+                let attributes = {
+                    let value = unsafe { bit7z_ffi::bit7z_item_attributes(reader_ptr, index) };
+                    (value != 0).then_some(value)
                 };
-                let modified = if item_ptr.is_null() {
-                    None
-                } else {
-                    let secs = unsafe { bit7z_ffi::bit7z_item_mtime(item_ptr) };
-                    epoch_to_datetime(secs)
+                let posix_attrib = {
+                    let value = unsafe { bit7z_ffi::bit7z_item_posix_attrib(reader_ptr, index) };
+                    (value != 0).then_some(value)
                 };
-                let created = if item_ptr.is_null() {
-                    None
-                } else {
-                    let secs = unsafe { bit7z_ffi::bit7z_item_ctime(item_ptr) };
-                    epoch_to_datetime(secs)
+                let host_os = {
+                    let value = unsafe { bit7z_ffi::bit7z_item_host_os(reader_ptr, index) };
+                    (value != 0).then_some(value)
                 };
-                let accessed = if item_ptr.is_null() {
-                    None
-                } else {
-                    let secs = unsafe { bit7z_ffi::bit7z_item_atime(item_ptr) };
-                    epoch_to_datetime(secs)
-                };
-                let attributes = if item_ptr.is_null() {
-                    None
-                } else {
-                    Some(unsafe { bit7z_ffi::bit7z_item_attributes(item_ptr) })
-                };
-                let posix_attrib = if item_ptr.is_null() {
-                    None
-                } else {
-                    Some(unsafe { bit7z_ffi::bit7z_item_posix_attrib(item_ptr) })
-                };
-                let host_os = if item_ptr.is_null() {
-                    None
-                } else {
-                    Some(unsafe { bit7z_ffi::bit7z_item_host_os(item_ptr) })
-                };
-                let is_symlink = if item_ptr.is_null() {
-                    false
-                } else {
-                    unsafe { bit7z_ffi::bit7z_item_is_symlink(item_ptr) != 0 }
-                };
-                let compression_method = if item_ptr.is_null() {
-                    None
-                } else {
+                let is_symlink =
+                    unsafe { bit7z_ffi::bit7z_item_is_symlink(reader_ptr, index) != 0 };
+                let compression_method = {
                     let mut buf = vec![0u8; 64];
                     let n = unsafe {
                         bit7z_ffi::bit7z_item_compression_method(
-                            item_ptr,
+                            reader_ptr,
+                            index,
                             buf.as_mut_ptr() as *mut _,
                             64,
                         )
@@ -439,12 +423,10 @@ impl ArchiveEngine for Bit7zEngine {
                         if s.is_empty() { None } else { Some(s) }
                     }
                 };
-                let extension = if item_ptr.is_null() {
-                    None
-                } else {
+                let extension = {
                     let mut buf = vec![0u8; 64];
                     let n = unsafe {
-                        bit7z_ffi::bit7z_item_extension(item_ptr, buf.as_mut_ptr() as *mut _, 64)
+                        bit7z_ffi::bit7z_item_extension(reader_ptr, index, buf.as_mut_ptr() as *mut _, 64)
                     };
                     if n < 0 {
                         None
@@ -467,9 +449,7 @@ impl ArchiveEngine for Bit7zEngine {
                     is_directory: is_dir,
                     is_encrypted: is_enc,
                     is_symlink,
-                    crc: if !item_ptr.is_null()
-                        && unsafe { bit7z_ffi::bit7z_item_crc_defined(item_ptr) != 0 }
-                    {
+                    crc: if unsafe { bit7z_ffi::bit7z_item_crc_defined(reader_ptr, index) != 0 } {
                         Some(crc)
                     } else {
                         None

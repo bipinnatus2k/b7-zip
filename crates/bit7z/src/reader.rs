@@ -328,32 +328,35 @@ impl<'a> Item<'a> {
         unsafe { bit7z_ffi::bit7z_item_is_encrypted(self.reader.raw.as_ptr(), self.index) != 0 }
     }
 
-    fn raw_ptr(&self) -> *mut c_void {
-        unsafe { bit7z_ffi::bit7z_item_from_reader(self.reader.raw.as_ptr(), self.index) }
+    // Property reads go through the reader + index; the FFI derives the item
+    // from the live archive each call (holding a `BitArchiveItem*` across
+    // calls is use-after-free — `items()` returns a temporary vector).
+    fn reader_ptr(&self) -> *mut c_void {
+        self.reader.raw.as_ptr()
     }
 
     pub fn mtime(&self) -> Result<u64, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_mtime(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_mtime(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
     pub fn ctime(&self) -> Result<u64, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_ctime(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_ctime(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
     pub fn atime(&self) -> Result<u64, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_atime(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_atime(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
     pub fn attributes(&self) -> Result<u32, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_attributes(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_attributes(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
     pub fn host_os(&self) -> Result<u8, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_host_os(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_host_os(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
@@ -362,7 +365,8 @@ impl<'a> Item<'a> {
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
             bit7z_ffi::bit7z_item_compression_method(
-                self.raw_ptr(),
+                self.reader_ptr(),
+                self.index,
                 buf.as_mut_ptr() as *mut _,
                 buf_size,
             )
@@ -378,7 +382,7 @@ impl<'a> Item<'a> {
         let buf_size: u32 = 256;
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
-            bit7z_ffi::bit7z_item_comment(self.raw_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+            bit7z_ffi::bit7z_item_comment(self.reader_ptr(), self.index, buf.as_mut_ptr() as *mut _, buf_size)
         };
         if ret < 0 {
             return Err("failed to get comment".into());
@@ -391,7 +395,7 @@ impl<'a> Item<'a> {
         let buf_size: u32 = 256;
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
-            bit7z_ffi::bit7z_item_user(self.raw_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+            bit7z_ffi::bit7z_item_user(self.reader_ptr(), self.index, buf.as_mut_ptr() as *mut _, buf_size)
         };
         if ret < 0 {
             return Err("failed to get user".into());
@@ -404,7 +408,7 @@ impl<'a> Item<'a> {
         let buf_size: u32 = 256;
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
-            bit7z_ffi::bit7z_item_group(self.raw_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+            bit7z_ffi::bit7z_item_group(self.reader_ptr(), self.index, buf.as_mut_ptr() as *mut _, buf_size)
         };
         if ret < 0 {
             return Err("failed to get group".into());
@@ -414,12 +418,12 @@ impl<'a> Item<'a> {
     }
 
     pub fn is_symlink(&self) -> Result<bool, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_is_symlink(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_is_symlink(self.reader_ptr(), self.index) };
         Ok(result != 0)
     }
 
     pub fn posix_attrib(&self) -> Result<u32, String> {
-        let result = unsafe { bit7z_ffi::bit7z_item_posix_attrib(self.raw_ptr()) };
+        let result = unsafe { bit7z_ffi::bit7z_item_posix_attrib(self.reader_ptr(), self.index) };
         Ok(result)
     }
 
@@ -427,7 +431,7 @@ impl<'a> Item<'a> {
         let buf_size: u32 = 256;
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
-            bit7z_ffi::bit7z_item_extension(self.raw_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+            bit7z_ffi::bit7z_item_extension(self.reader_ptr(), self.index, buf.as_mut_ptr() as *mut _, buf_size)
         };
         if ret < 0 {
             return Err("failed to get extension".into());
@@ -440,7 +444,7 @@ impl<'a> Item<'a> {
         let buf_size: u32 = 256;
         let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
         let ret = unsafe {
-            bit7z_ffi::bit7z_item_hardlink(self.raw_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+            bit7z_ffi::bit7z_item_hardlink(self.reader_ptr(), self.index, buf.as_mut_ptr() as *mut _, buf_size)
         };
         if ret < 0 {
             return Err("failed to get hardlink".into());
