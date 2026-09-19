@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 const ICON_BYTES: &[u8] = include_bytes!("../../resources/bit7z.ico");
 
+/// The idle tray tooltip; progress pages restore it when their job ends.
+pub const BASE_TOOLTIP: &str = "Bit7zFM";
+
 /// The live tray handle, kept so the tooltip can be updated later.
 #[derive(Default)]
 pub struct TrayGlobal(Option<Arc<gpui_tray::TrayHandle>>);
@@ -28,7 +31,7 @@ pub fn init(cx: &mut App, show_window: ShowWindow) {
     let state = TrayState::new()
         .icon(icon)
         .title("Bit7zFM")
-        .tooltip("Bit7zFM")
+        .tooltip(BASE_TOOLTIP)
         .click_policy(
             TrayClickPolicy::platform_default()
                 .left(TrayClickAction::EmitEvent)

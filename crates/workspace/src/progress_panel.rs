@@ -41,6 +41,10 @@ pub struct ProgressPanel {
     pause: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     rx: Option<Receiver<TaskEvent>>,
+    /// Last state mirrored into the tray tooltip, so the tooltip is only
+    /// rewritten when something the user could see actually changed.
+    tray_percent: Option<u64>,
+    tray_paused: bool,
     /// Host-side hook (workspace refresh etc.), invoked once on completion
     /// with (success, message, error-kind). The error kind lets the host
     /// react to *what* failed (e.g. wrong password) without string-matching
@@ -76,10 +80,11 @@ impl BasePanel for ProgressPanel {
         self.finished.is_some()
     }
 
-    fn on_removed(&mut self, _: &mut Window, _: &mut Context<Self>) {
+    fn on_removed(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         // Closing the page mid-run cancels the job with it.
         self.cancel.store(true, Ordering::Relaxed);
         self.pause.store(false, Ordering::Relaxed);
+        tray::set_tooltip(cx, tray::BASE_TOOLTIP);
     }
 }
 
@@ -120,6 +125,8 @@ impl ProgressPanel {
             pause,
             cancel,
             rx: Some(rx),
+            tray_percent: None,
+            tray_paused: false,
             on_finished: None,
             _poll: None,
         };
@@ -148,34 +155,55 @@ impl ProgressPanel {
 
     /// Drains pending events; returns false once the panel is gone.
     fn poll(&mut self, cx: &mut Context<Self>) -> bool {
+        // Two-phase: collect while borrowing the receiver, then apply with
+        // `&mut self` (the tray mirror needs it). `Finished` is the last
+        // event a runner sends, so applying stops there.
         let Some(rx) = &self.rx else { return false };
+        let mut drained = Vec::new();
+        let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(TaskEvent::Progress { processed, total }) => {
+                Ok(event) => drained.push(event),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    break;
+                }
+            }
+        }
+        drop(rx);
+
+        for event in drained {
+            match event {
+                TaskEvent::Progress { processed, total } => {
                     self.processed = processed;
                     if total > 0 {
                         self.total = Some(total);
                     }
+                    self.publish_tray_progress(cx);
                 }
-                Ok(TaskEvent::FileStarted { path }) => {
+                TaskEvent::FileStarted { path } => {
                     self.current_file = Some(path);
                 }
-                Ok(TaskEvent::OverwriteConflict { path, reply }) => {
+                TaskEvent::OverwriteConflict { path, reply } => {
                     // The engine thread is parked on this decision; surface
                     // the question until the user answers.
                     self.conflict = Some((path, reply));
                     cx.notify();
                 }
-                Ok(TaskEvent::Finished {
+                TaskEvent::Finished {
                     success,
                     message,
                     error,
-                }) => {
+                } => {
                     self.finished = Some((success, message.clone()));
                     self.paused = false;
                     self.pause.store(false, Ordering::Relaxed);
                     self.rx = None;
                     self._poll = None;
+                    self.tray_percent = None;
+                    self.tray_paused = false;
+                    tray::set_tooltip(cx, tray::BASE_TOOLTIP);
                     cx.emit(ProgressEvent::Finished {
                         success,
                         message: message.clone(),
@@ -186,25 +214,50 @@ impl ProgressPanel {
                     cx.notify();
                     return true;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // Mirror the pause flag for the render.
-                    let paused = self.pause.load(Ordering::Relaxed);
-                    if paused != self.paused {
-                        self.paused = paused;
-                        cx.notify();
-                    }
-                    return true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.finished =
-                        Some((false, "task worker stopped unexpectedly".into()));
-                    self.rx = None;
-                    self._poll = None;
-                    cx.notify();
-                    return true;
-                }
             }
         }
+        if disconnected {
+            self.finished =
+                Some((false, "task worker stopped unexpectedly".into()));
+            self.rx = None;
+            self._poll = None;
+            self.tray_percent = None;
+            self.tray_paused = false;
+            tray::set_tooltip(cx, tray::BASE_TOOLTIP);
+            cx.notify();
+            return true;
+        }
+        // Mirror the pause flag for the render.
+        let paused = self.pause.load(Ordering::Relaxed);
+        if paused != self.paused {
+            self.paused = paused;
+            self.publish_tray_progress(cx);
+            cx.notify();
+        }
+        true
+    }
+
+    /// Mirrors job progress into the tray tooltip, so a job left running
+    /// while the window is minimized or on another monitor stays observable.
+    /// Republished only when the visible state (percent / paused) changes.
+    fn publish_tray_progress(&mut self, cx: &mut Context<Self>) {
+        let percent = self
+            .total
+            .filter(|total| *total > 0)
+            .map(|total| self.processed * 100 / total);
+        if percent == self.tray_percent && self.paused == self.tray_paused {
+            return;
+        }
+        self.tray_percent = percent;
+        self.tray_paused = self.paused;
+        let mut text = format!("Bit7zFM · {}", self.title);
+        if let Some(percent) = percent {
+            text.push_str(&format!(" {percent}%"));
+        }
+        if self.paused {
+            text.push_str(" (paused)");
+        }
+        tray::set_tooltip(cx, text);
     }
 
     fn toggle_pause(&mut self, cx: &mut Context<Self>) {
