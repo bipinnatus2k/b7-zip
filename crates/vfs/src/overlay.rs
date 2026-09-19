@@ -399,6 +399,15 @@ impl Overlay {
     }
 
     /// Rename the node at `from` to `to` (both relative paths).
+    ///
+    /// The node's existing dirty state is preserved where it must be: an
+    /// [`DirtyState::Added`] node stays Added (there is no archive entry to
+    /// rename, and the diff will re-add it under the new path). Anything
+    /// else becomes [`DirtyState::Renamed`]; a content change underneath a
+    /// rename is recovered at diff time by comparing attributes.
+    ///
+    /// Callers that rename on-disk files must re-sync afterwards so the
+    /// node's `fs_path` attribute follows the new location.
     pub fn rename_path(&mut self, from: &str, to: &str) -> Result<(), OverlayError> {
         let id = self
             .working
@@ -415,7 +424,9 @@ impl Overlay {
         self.working
             .reparent_node(id, Some(new_parent_id), &new_name)
             .map_err(|e| OverlayError::Tree(e.to_string()))?;
-        self.dirty.insert(id, DirtyState::Renamed);
+        if self.dirty.get(&id) != Some(&DirtyState::Added) {
+            self.dirty.insert(id, DirtyState::Renamed);
+        }
         Ok(())
     }
 
@@ -594,6 +605,61 @@ mod tests {
         assert!(overlay.working().resolve_path("docs").is_some());
         assert!(overlay.working().resolve_path("dir").is_none());
         assert_eq!(overlay.dirty().len(), 2);
+    }
+
+    #[test]
+    fn rename_keeps_added_state() {
+        let mut overlay = Overlay::new(sample_base());
+        let mut fs_tree = Tree::new(next_node_id());
+        let root = fs_tree.root();
+        fs_tree
+            .insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
+        let mut extra = VfsNode::new(next_node_id(), Some(root), "extra.txt", false);
+        extra.set_attr(attr::SIZE, AttrValue::UInt(10));
+        extra.set_attr(attr::FS_PATH, AttrValue::String("C:/w/extra.txt".into()));
+        fs_tree.insert_node(extra.clone()).unwrap();
+        overlay.sync_from(&fs_tree);
+
+        overlay.rename_path("extra.txt", "renamed.txt").unwrap();
+        let id = overlay.working().resolve_path("renamed.txt").unwrap();
+        assert_eq!(overlay.dirty_state(id), Some(DirtyState::Added));
+
+        let cs = overlay.changeset();
+        assert!(cs.renames.is_empty());
+        assert_eq!(cs.additions.len(), 1);
+        assert_eq!(cs.additions[0].archive_path, "renamed.txt");
+    }
+
+    #[test]
+    fn rename_of_modified_file_commits_content_and_move() {
+        let mut overlay = Overlay::new(sample_base());
+        let mut fs_tree = Tree::new(next_node_id());
+        let root = fs_tree.root();
+        fs_tree
+            .insert_node(VfsNode::new(root, None, "", true))
+            .unwrap();
+        let mut edited = VfsNode::new(next_node_id(), Some(root), "a.txt", false);
+        edited.set_attr(attr::SIZE, AttrValue::UInt(999));
+        edited.set_attr(attr::FS_PATH, AttrValue::String("C:/w/a.txt".into()));
+        fs_tree.insert_node(edited.clone()).unwrap();
+        overlay.sync_from(&fs_tree);
+        let id = overlay.working().resolve_path("a.txt").unwrap();
+        assert_eq!(overlay.dirty_state(id), Some(DirtyState::Modified));
+
+        overlay.rename_path("a.txt", "b.txt").unwrap();
+        let id = overlay.working().resolve_path("b.txt").unwrap();
+        assert_eq!(overlay.dirty_state(id), Some(DirtyState::Renamed));
+
+        // The engine cannot delete and rename the same index in one pass,
+        // so the commit must move the content: drop the old entry, add the
+        // edited file under the new path.
+        let cs = overlay.changeset();
+        assert!(cs.renames.is_empty());
+        assert_eq!(cs.additions.len(), 1);
+        assert_eq!(cs.additions[0].archive_path, "b.txt");
+        assert_eq!(cs.additions[0].fs_path.to_string_lossy(), "C:/w/a.txt");
+        assert_eq!(cs.deletions.len(), 1);
     }
 
     #[test]
