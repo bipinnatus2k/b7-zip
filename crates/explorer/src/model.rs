@@ -80,85 +80,109 @@ pub const CRC_WIDTH: f32 = 74.0;
 pub const METHOD_WIDTH: f32 = 60.0;
 
 /// Approximate horizontal padding a cell adds around its content (px_2 both
-/// sides), counted once per column when budgeting the visible set.
+/// sides), counted once per column when budgeting the table.
 const CELL_PADDING: f32 = 16.0;
 
-/// Which optional columns fit the space the table was given. Name and Size
-/// are always shown; the rest drop right-to-left (least useful first) as the
-/// width shrinks — 7zFM-style. Derive it from the **container's** measured
-/// width (`ui::components::Responsive`), never the window width.
+/// Width at which the table shows every column in full. Inside a narrower
+/// container the content keeps this minimum and the table scrolls
+/// horizontally — columns are never compressed or hidden to fit.
+pub const TOTAL_TABLE_WIDTH: f32 = NAME_MIN_WIDTH
+    + SIZE_WIDTH
+    + PACKED_WIDTH
+    + MODIFIED_WIDTH
+    + ATTRIBUTES_WIDTH
+    + CRC_WIDTH
+    + METHOD_WIDTH
+    + CELL_PADDING * 7.0;
+
+/// Floor for every user-resizable column, so a drag cannot swallow content.
+pub const COLUMN_MIN_WIDTH: f32 = 40.0;
+
+/// The optional (non-Name) table columns: shown in the order they appear in
+/// the column list, resizable and hideable individually. The Name column is
+/// not part of this — it is always first and flexes to the remaining width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VisibleColumns {
-    pub packed: bool,
-    pub modified: bool,
-    pub attributes: bool,
-    pub crc: bool,
-    pub method: bool,
+pub enum ColumnKind {
+    Size,
+    Packed,
+    Modified,
+    Attributes,
+    Crc,
+    Method,
 }
 
-impl VisibleColumns {
-    pub const MINIMAL: Self = Self {
-        packed: false,
-        modified: false,
-        attributes: false,
-        crc: false,
-        method: false,
-    };
+pub const ALL_COLUMN_KINDS: [ColumnKind; 6] = [
+    ColumnKind::Size,
+    ColumnKind::Packed,
+    ColumnKind::Modified,
+    ColumnKind::Attributes,
+    ColumnKind::Crc,
+    ColumnKind::Method,
+];
 
-    /// Width needed to show these columns at the name column's minimum,
-    /// including per-cell padding.
-    pub fn min_width(self) -> f32 {
-        let mut width = NAME_MIN_WIDTH + SIZE_WIDTH + CELL_PADDING * 2.0;
-        if self.packed {
-            width += PACKED_WIDTH + CELL_PADDING;
+impl ColumnKind {
+    /// Header caption.
+    pub fn title(self) -> &'static str {
+        match self {
+            ColumnKind::Size => "Size",
+            ColumnKind::Packed => "Packed",
+            ColumnKind::Modified => "Modified",
+            ColumnKind::Attributes => "Attributes",
+            ColumnKind::Crc => "CRC",
+            ColumnKind::Method => "Method",
         }
-        if self.modified {
-            width += MODIFIED_WIDTH + CELL_PADDING;
-        }
-        if self.attributes {
-            width += ATTRIBUTES_WIDTH + CELL_PADDING;
-        }
-        if self.crc {
-            width += CRC_WIDTH + CELL_PADDING;
-        }
-        if self.method {
-            width += METHOD_WIDTH + CELL_PADDING;
-        }
-        width
     }
 
-    /// Show as many columns as fit in `width`, re-adding from the most to the
-    /// least valuable (`None` — not measured yet — answers the conservative
-    /// [`MINIMAL`][Self::MINIMAL] set, per the ui crate's no-guessing rule).
-    pub fn for_width(width: Option<f32>) -> Self {
-        let Some(width) = width else {
-            return Self::MINIMAL;
-        };
-        let mut visible = Self::MINIMAL;
-        let candidates: [(f32, fn(&mut VisibleColumns)); 5] = [
-            (PACKED_WIDTH + CELL_PADDING, |v: &mut VisibleColumns| v.packed = true),
-            (
-                MODIFIED_WIDTH + CELL_PADDING,
-                |v: &mut VisibleColumns| v.modified = true,
-            ),
-            (
-                ATTRIBUTES_WIDTH + CELL_PADDING,
-                |v: &mut VisibleColumns| v.attributes = true,
-            ),
-            (CRC_WIDTH + CELL_PADDING, |v: &mut VisibleColumns| v.crc = true),
-            (METHOD_WIDTH + CELL_PADDING, |v: &mut VisibleColumns| v.method = true),
-        ];
-        for (extra, add) in candidates {
-            if visible.min_width() + extra <= width {
-                let mut trial = visible;
-                add(&mut trial);
-                visible = trial;
-            } else {
-                break; // ordered by value: a later column hides none of this one
-            }
+    /// Width a fresh column starts at.
+    pub fn default_width(self) -> f32 {
+        match self {
+            ColumnKind::Size => SIZE_WIDTH,
+            ColumnKind::Packed => PACKED_WIDTH,
+            ColumnKind::Modified => MODIFIED_WIDTH,
+            ColumnKind::Attributes => ATTRIBUTES_WIDTH,
+            ColumnKind::Crc => CRC_WIDTH,
+            ColumnKind::Method => METHOD_WIDTH,
         }
-        visible
     }
+
+    /// The sort this column maps to, for header clicks; `None` is not
+    /// sortable.
+    pub fn sort_column(self) -> Option<SortColumn> {
+        match self {
+            ColumnKind::Size => Some(SortColumn::Size),
+            ColumnKind::Modified => Some(SortColumn::Modified),
+            ColumnKind::Crc => Some(SortColumn::Crc),
+            _ => None,
+        }
+    }
+}
+
+/// One visible column with its user-chosen width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Column {
+    pub kind: ColumnKind,
+    pub width: f32,
+}
+
+/// The initial column set: every column visible at its default width.
+pub fn default_columns() -> Vec<Column> {
+    ALL_COLUMN_KINDS
+        .iter()
+        .copied()
+        .map(|kind| Column {
+            kind,
+            width: kind.default_width(),
+        })
+        .collect()
+}
+
+/// The content's minimum width with these columns: the name column's floor,
+/// each visible column's width, and one padding allowance per column
+/// (including Name) — the dynamic form of [`TOTAL_TABLE_WIDTH`].
+pub fn total_table_width(columns: &[Column]) -> f32 {
+    NAME_MIN_WIDTH
+        + columns.iter().map(|column| column.width).sum::<f32>()
+        + CELL_PADDING * (columns.len() as f32 + 1.0)
 }
 
 /// Rebuild the rows of `current_path` from a session's working overlay.
@@ -392,6 +416,19 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_total_matches_the_all_columns_constant() {
+        assert_eq!(total_table_width(&default_columns()), TOTAL_TABLE_WIDTH);
+    }
+
+    #[test]
+    fn hiding_a_column_shrinks_the_total() {
+        let mut columns = default_columns();
+        columns.retain(|column| column.kind != ColumnKind::Method);
+        let expected = TOTAL_TABLE_WIDTH - (METHOD_WIDTH + CELL_PADDING);
+        assert!((total_table_width(&columns) - expected).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn natural_cmp_orders_digits_numerically() {
         assert_eq!(natural_cmp("a2", "a10"), Ordering::Less);
         assert_eq!(natural_cmp("a10", "a2"), Ordering::Greater);
@@ -401,50 +438,16 @@ mod tests {
     }
 
     #[test]
-    fn visible_columns_unmeasured_answers_minimal() {
-        assert_eq!(VisibleColumns::for_width(None), VisibleColumns::MINIMAL);
-    }
-
-    #[test]
-    fn visible_columns_grow_monotonically_with_width() {
-        let narrow = VisibleColumns::for_width(Some(260.0));
-        assert_eq!(narrow, VisibleColumns::MINIMAL, "narrow shows name+size only");
-        let mid = VisibleColumns::for_width(Some(480.0));
-        assert!(mid.packed && mid.modified, "mid grows to packed/modified");
-        assert!(!mid.attributes && !mid.crc && !mid.method, "mid hides the rest");
-        let full = VisibleColumns::for_width(Some(VisibleColumns::MINIMAL.min_width() + 1000.0));
-        assert!(
-            full.packed && full.modified && full.attributes && full.crc && full.method,
-            "ample width shows all"
-        );
-    }
-
-    #[test]
-    fn visible_columns_never_lose_ground_as_width_grows() {
-        let mut previous = VisibleColumns::MINIMAL;
-        for width in (200..1200).step_by(8) {
-            let current = VisibleColumns::for_width(Some(width as f32));
-            let added = [
-                (!previous.packed && current.packed),
-                (!previous.modified && current.modified),
-                (!previous.attributes && current.attributes),
-                (!previous.crc && current.crc),
-                (!previous.method && current.method),
-            ];
-            let removed = [
-                (previous.packed && !current.packed),
-                (previous.modified && !current.modified),
-                (previous.attributes && !current.attributes),
-                (previous.crc && !current.crc),
-                (previous.method && !current.method),
-            ];
-            assert!(removed.iter().all(|r| !r), "column vanished at {width}px");
-            assert!(
-                added.iter().filter(|a| **a).count() <= 1,
-                "more than one column added at {width}px"
-            );
-            previous = current;
-        }
+    fn total_table_width_covers_every_column() {
+        let columns = NAME_MIN_WIDTH
+            + SIZE_WIDTH
+            + PACKED_WIDTH
+            + MODIFIED_WIDTH
+            + ATTRIBUTES_WIDTH
+            + CRC_WIDTH
+            + METHOD_WIDTH;
+        assert_eq!(TOTAL_TABLE_WIDTH, columns + CELL_PADDING * 7.0);
+        assert!(TOTAL_TABLE_WIDTH > columns, "the budget includes cell padding");
     }
 
     #[test]

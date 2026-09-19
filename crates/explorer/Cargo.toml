@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+app_action.workspace = true
 gpui.workspace = true
 gpui-kit.workspace = true
 reactive-signals.workspace = true

@@ -798,6 +798,7 @@ checksum = "b71798fca2c1fe1086445a7258a4bc81e6e49dcd24c8d0dd9a1e57395b603f51"
 name = "bit7z-explorer"
 version = "0.1.0"
 dependencies = [
+ "app_action",
  "gpui-kit",
  "gpui-pre",
  "reactive-signals",
