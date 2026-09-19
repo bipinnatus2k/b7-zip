@@ -117,6 +117,15 @@ impl ArchiveSession {
         self.password = password;
     }
 
+    /// The archive-level comment (formats that carry one, e.g. ZIP), read
+    /// straight from the archive file. Needs a header password when the
+    /// archive's header is encrypted, hence re-read after one is supplied.
+    pub fn comment(&self) -> Result<Option<String>, SessionError> {
+        self.engine
+            .archive_comment(&self.archive_path, self.password.as_ref())
+            .map_err(SessionError::Archive)
+    }
+
     /// Lazily extract the entry at `archive_index` into the working
     /// directory (mirroring its archive-relative path). Returns the
     /// extracted file path.

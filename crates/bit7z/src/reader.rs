@@ -183,6 +183,21 @@ impl ArchiveReader {
         unsafe { bit7z_reader_has_encrypted_items(self.raw.as_ptr()) != 0 }
     }
 
+    /// The archive-level comment text (e.g. a ZIP's comment), or an empty
+    /// string when the format carries none.
+    pub fn archive_comment(&self) -> Result<String, String> {
+        let buf_size: u32 = 4096;
+        let mut buf: Vec<u8> = vec![0u8; buf_size as usize];
+        let ret = unsafe {
+            bit7z_ffi::bit7z_reader_comment(self.raw.as_ptr(), buf.as_mut_ptr() as *mut _, buf_size)
+        };
+        if ret < 0 {
+            return Err("failed to get archive comment".into());
+        }
+        let c_str = unsafe { CStr::from_ptr(buf.as_ptr() as *const _) };
+        Ok(c_str.to_string_lossy().into_owned())
+    }
+
     /// Extracts items with per-file overwrite/progress/file callbacks.
     /// `ctx` is passed to every callback as opaque user data.
     #[allow(clippy::too_many_arguments)]

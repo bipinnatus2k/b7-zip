@@ -333,6 +333,19 @@ fn writer_format_for_archive(path: &Path) -> WriterFormat {
 }
 
 impl ArchiveEngine for Bit7zEngine {
+    fn archive_comment(
+        &self,
+        path: &Path,
+        password: Option<&password::Password>,
+    ) -> Result<Option<String>, ArchiveError> {
+        self.with_reader(path, password, |reader| {
+            reader
+                .archive_comment()
+                .map(|comment| if comment.is_empty() { None } else { Some(comment) })
+                .map_err(ArchiveError::Engine)
+        })
+    }
+
     fn list(
         &self,
         path: &Path,

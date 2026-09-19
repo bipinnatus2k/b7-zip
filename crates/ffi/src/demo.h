@@ -496,6 +496,15 @@ extern "C" inline int32_t bit7z_reader_has_comment(void* reader_ptr) {
     } catch (...) { return 0; }
 }
 
+extern "C" inline int32_t bit7z_reader_comment(void* reader_ptr, char* out_buf, uint32_t buf_size) {
+    try {
+        auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);
+        auto prop = reader.archiveProperty(ArchiveProperties::Comment);
+        if (prop.isEmpty()) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return 0; }
+        return tstring_to_utf8(prop.getString(), out_buf, buf_size);
+    } catch (...) { if (out_buf && buf_size > 0) out_buf[0] = '\0'; return -1; }
+}
+
 extern "C" inline uint64_t bit7z_reader_dictionary_size(void* reader_ptr) {
     try {
         auto& reader = *static_cast<bit7z::BitArchiveReader*>(reader_ptr);

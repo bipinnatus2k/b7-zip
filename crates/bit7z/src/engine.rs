@@ -394,6 +394,14 @@ pub trait ArchiveEngine: Send + Sync {
         password: Option<&password::Password>,
     ) -> Result<Vec<ArchiveEntry>, ArchiveError>;
 
+    /// The archive-level comment (formats that carry one, e.g. ZIP), or
+    /// `None` when the archive has none.
+    fn archive_comment(
+        &self,
+        path: &std::path::Path,
+        password: Option<&password::Password>,
+    ) -> Result<Option<String>, ArchiveError>;
+
     /// Extract the given entries (by index) to `dest`.
     fn extract(
         &self,

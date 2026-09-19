@@ -313,3 +313,65 @@ fn auto_rename_keeps_existing_file() {
         "NEW"
     );
 }
+
+/// Rewrites a ZIP's end-of-central-directory record to carry `comment`
+/// (7-Zip's writer has no comment switch; the EOCD is the last record, so
+/// extending its tail is a valid surgery).
+fn append_zip_comment(path: &std::path::Path, comment: &str) {
+    let bytes = std::fs::read(path).unwrap();
+    let sig = b"PK\x05\x06";
+    let pos = bytes
+        .windows(4)
+        .rposition(|window| window == sig)
+        .expect("EOCD signature");
+    let comment = comment.as_bytes();
+    assert!(comment.len() <= u16::MAX as usize);
+    let mut out = bytes[..pos + 20].to_vec();
+    out.extend_from_slice(&(comment.len() as u16).to_le_bytes());
+    out.extend_from_slice(comment);
+    std::fs::write(path, out).unwrap();
+}
+
+#[test]
+fn archive_comment_roundtrip() {
+    let _engine_guard = engine_lock();
+    let _process_guard = engine_process_lock();
+    let Some(engine) = engine() else {
+        eprintln!("skipped: 7zip.dll not found");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("file.txt");
+    std::fs::write(&src, b"commented").unwrap();
+    let archive = dir.path().join("comment.zip");
+    let mut options = CompressOptions::default();
+    options.format = WriterFormat::Zip;
+    engine
+        .compress(&[src], &archive, &options)
+        .expect("compress zip");
+
+    // A fresh ZIP carries no comment.
+    assert_eq!(engine.archive_comment(&archive, None).unwrap(), None);
+
+    append_zip_comment(&archive, "Created by the Bit7zFM test suite");
+    assert_eq!(
+        engine.archive_comment(&archive, None).unwrap().as_deref(),
+        Some("Created by the Bit7zFM test suite")
+    );
+
+    // The surgery left a valid archive behind.
+    let entries = engine.list(&archive, None).expect("list after comment");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "file.txt");
+
+    // 7z has no archive-comment property: reading yields None, not an error.
+    let sevenzip = dir.path().join("plain.7z");
+    engine
+        .compress(
+            &[dir.path().join("file.txt")],
+            &sevenzip,
+            &CompressOptions::default(),
+        )
+        .expect("compress 7z");
+    assert_eq!(engine.archive_comment(&sevenzip, None).unwrap(), None);
+}

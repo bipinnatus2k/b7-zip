@@ -52,6 +52,7 @@ unsafe extern "C" {
     pub fn bit7z_reader_volumes_count(reader_ptr: *mut std::ffi::c_void) -> u32;
     pub fn bit7z_reader_headers_size(reader_ptr: *mut std::ffi::c_void) -> u64;
     pub fn bit7z_reader_has_comment(reader_ptr: *mut std::ffi::c_void) -> i32;
+    pub fn bit7z_reader_comment(reader_ptr: *mut std::ffi::c_void, out_buf: *mut std::ffi::c_char, buf_size: u32) -> i32;
     pub fn bit7z_reader_dictionary_size(reader_ptr: *mut std::ffi::c_void) -> u64;
     pub fn bit7z_reader_list_directory(reader_ptr: *mut std::ffi::c_void, path: *const std::ffi::c_char) -> *mut std::ffi::c_void;
     pub fn bit7z_item_list_count(list_ptr: *mut std::ffi::c_void) -> u32;

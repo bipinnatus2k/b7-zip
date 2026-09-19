@@ -55,6 +55,7 @@ void* (*force_bit7z_reader_is_multi_volume)(void) = (void* (*)(void)) &bit7z_rea
 void* (*force_bit7z_reader_volumes_count)(void) = (void* (*)(void)) &bit7z_reader_volumes_count;
 void* (*force_bit7z_reader_headers_size)(void) = (void* (*)(void)) &bit7z_reader_headers_size;
 void* (*force_bit7z_reader_has_comment)(void) = (void* (*)(void)) &bit7z_reader_has_comment;
+void* (*force_bit7z_reader_comment)(void) = (void* (*)(void)) &bit7z_reader_comment;
 void* (*force_bit7z_reader_dictionary_size)(void) = (void* (*)(void)) &bit7z_reader_dictionary_size;
 void* (*force_bit7z_reader_list_directory)(void) = (void* (*)(void)) &bit7z_reader_list_directory;
 void* (*force_bit7z_item_list_count)(void) = (void* (*)(void)) &bit7z_item_list_count;
