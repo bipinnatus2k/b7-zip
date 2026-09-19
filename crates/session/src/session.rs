@@ -394,6 +394,25 @@ impl ArchiveSession {
         self.overlay.discard_pending();
     }
 
+    /// Move a materialized work-dir entry (file or subtree) after an
+    /// archive-side rename, so the next rescan does not resurrect the old
+    /// paths as new local files. Both paths are archive-relative and are
+    /// zip-slip sanitized before they touch the work dir. Entries are
+    /// extracted lazily, so a missing source is not an error.
+    pub fn rename_work_dir_entry(&mut self, from_rel: &str, to_rel: &str) -> std::io::Result<()> {
+        let from = self
+            .work_dir
+            .join(temp::sanitize_relative(Path::new(from_rel)));
+        let to = self.work_dir.join(temp::sanitize_relative(Path::new(to_rel)));
+        if !from.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&from, &to)
+    }
+
     /// Re-list the archive and rebuild the overlay from scratch. Used by the
     /// manager after operations that modify the archive in place (delete,
     /// rename, ...) so the view reflects the new contents.

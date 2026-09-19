@@ -1367,6 +1367,7 @@ impl ArchiveWorkspace {
             return;
         };
         let old_name = row.path.rsplit('/').next().unwrap_or(&row.path).to_string();
+        let old_path = row.path.clone();
         let parent = row
             .path
             .rsplit_once('/')
@@ -1383,6 +1384,7 @@ impl ArchiveWorkspace {
             let input = dialog_input.clone();
             let parent = parent.clone();
             let old_name = old_name.clone();
+            let old_path = old_path.clone();
             dialog
                 .title("Rename")
                 .w(px(380.0))
@@ -1396,12 +1398,13 @@ impl ArchiveWorkspace {
                         Some(parent) => format!("{parent}/{new_name}"),
                         None => new_name,
                     };
-                    if new_path == old_name {
+                    if new_path == old_path {
                         return true;
                     }
                     // Apply the rename through the task pipeline (progress page,
                     // cancel, typed outcome), then the reload runs on success.
                     let weak = weak.clone();
+                    let work_dir_move = (old_path.clone(), new_path.clone());
                     cx.spawn(async move |cx| {
                         let _ = weak.update(cx, |this, cx| {
                             let Some(session) = this.session.clone() else {
@@ -1421,7 +1424,12 @@ impl ArchiveWorkspace {
                                 new_path,
                                 password_hint: password.is_some(),
                             };
-                            this.run_job(spec, password, cx);
+                            this.run_job_with_work_dir_move(
+                                spec,
+                                password,
+                                Some(work_dir_move),
+                                cx,
+                            );
                         });
                     })
                     .detach();
@@ -1857,6 +1865,20 @@ impl ArchiveWorkspace {
         password: Option<password::Password>,
         cx: &mut Context<Self>,
     ) {
+        self.run_job_with_work_dir_move(spec, password, None, cx);
+    }
+
+    /// Like [`Self::run_job`], but moves a materialized work-dir entry from
+    /// `work_dir_move.0` to `.1` after a successful in-place rewrite — used
+    /// by rename so extracted copies follow the archive-side rename instead
+    /// of resurfacing as local additions on the next rescan.
+    fn run_job_with_work_dir_move(
+        &mut self,
+        spec: JobSpec,
+        password: Option<password::Password>,
+        work_dir_move: Option<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(engine) = globals::engine(cx) else {
             self.status = Some("7-Zip engine not loaded".into());
             cx.notify();
@@ -1950,6 +1972,13 @@ impl ArchiveWorkspace {
                                 }
                                 if success {
                                     if rewrites_archive {
+                                        // Follow a rename with the matching
+                                        // move of any extracted copy before
+                                        // the reload rescan turns stale paths
+                                        // into local additions.
+                                        if let Some((from, to)) = work_dir_move.as_ref() {
+                                            this.move_work_dir_entry(from, to);
+                                        }
                                         // Re-read the rewritten archive so the
                                         // overlay's base and indices reflect it.
                                         this.reload_from_archive(cx);
@@ -1969,6 +1998,24 @@ impl ArchiveWorkspace {
             });
         })
         .detach();
+    }
+
+    /// Moves an extracted copy under the work dir after an archive-side
+    /// rename. Failures only surface in the status line: the reload that
+    /// follows is authoritative and never leaves the archive wrong.
+    fn move_work_dir_entry(&mut self, from_rel: &str, to_rel: &str) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        // Tolerate a poisoned lock instead of panicking from a completion
+        // callback; the reload that follows rebuilds the session state.
+        let mut session = match session.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Err(err) = session.rename_work_dir_entry(from_rel, to_rel) {
+            self.status = Some(format!("Failed to move extracted copy: {err}").into());
+        }
     }
 
     /// Re-reads the archive into the session overlay after an in-place

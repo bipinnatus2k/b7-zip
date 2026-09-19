@@ -30,6 +30,58 @@ fn ensure_compress_target_not_input(inputs: &[std::path::PathBuf], target: &Path
     Ok(())
 }
 
+/// Expand a rename into engine ops. 7-Zip stores every entry's full path
+/// independently, so renaming a directory entry must also rename each
+/// descendant, or the children stay behind under the old prefix and the
+/// folder appears to lose its contents. A file rename stays a single op.
+fn rename_ops(
+    engine: &dyn ArchiveEngine,
+    archive: &Path,
+    index: u32,
+    new_path: &str,
+    password: Option<&password::Password>,
+) -> Result<Vec<EngineOp>, bit7z_rs::ArchiveError> {
+    let entries = engine.list(archive, password)?;
+    let Some(entry) = entries.iter().find(|e| e.index == index) else {
+        return Err(bit7z_rs::ArchiveError::Engine(format!(
+            "rename: entry index {index} not found"
+        )));
+    };
+    if !entry.is_directory {
+        return Ok(vec![EngineOp::Rename {
+            archive_index: index,
+            new_path: new_path.to_string(),
+        }]);
+    }
+    let old_dir = entry.path.trim_end_matches('/');
+    let old_prefix = format!("{old_dir}/");
+    let new_base = new_path.trim_end_matches('/');
+    let mut ops = Vec::new();
+    for e in &entries {
+        // Directory entries may carry a trailing slash (it marks them as
+        // directories); keep that marker on the renamed path.
+        let had_slash = e.path.ends_with('/');
+        let trimmed = e.path.trim_end_matches('/');
+        let new_path = if trimmed == old_dir {
+            format!("{new_base}/")
+        } else if let Some(rest) = trimmed.strip_prefix(&old_prefix) {
+            let child = format!("{new_base}/{rest}");
+            if had_slash {
+                format!("{child}/")
+            } else {
+                child
+            }
+        } else {
+            continue;
+        };
+        ops.push(EngineOp::Rename {
+            archive_index: e.index,
+            new_path,
+        });
+    }
+    Ok(ops)
+}
+
 /// Events emitted while a task runs.
 #[derive(Debug, Clone)]
 pub enum TaskEvent {
@@ -322,10 +374,7 @@ fn run_job_with_pause(
             new_path,
             ..
         } => {
-            let ops = vec![EngineOp::Rename {
-                archive_index: *index,
-                new_path: new_path.clone(),
-            }];
+            let ops = rename_ops(engine, archive, *index, new_path, password)?;
             engine.update(archive, &ops, password)
         }
         JobSpec::NewFolder { .. } => {
@@ -432,5 +481,146 @@ mod tests {
             ensure_compress_target_not_input(&[input], &dir.join("new.7z")).is_ok()
         );
         fs::remove_dir_all(dir).ok();
+    }
+}
+// (tests module continues below in tests; the mock lives there)
+
+#[cfg(test)]
+mod rename_ops_tests {
+    use super::*;
+    use bit7z_rs::{ArchiveEntry, ArchiveEntryBuilder, CompressOptions, ExtractOptions, TestResult};
+
+    struct ListOnlyEngine(Vec<ArchiveEntry>);
+
+    impl ArchiveEngine for ListOnlyEngine {
+        fn list(
+            &self,
+            _path: &std::path::Path,
+            _password: Option<&password::Password>,
+        ) -> Result<Vec<ArchiveEntry>, bit7z_rs::ArchiveError> {
+            Ok(self.0.clone())
+        }
+        fn archive_comment(
+            &self,
+            _: &std::path::Path,
+            _: Option<&password::Password>,
+        ) -> Result<Option<String>, bit7z_rs::ArchiveError> {
+            Ok(None)
+        }
+        fn extract(
+            &self,
+            _: &std::path::Path,
+            _: &[u32],
+            _: &std::path::Path,
+            _: Option<&password::Password>,
+            _: &ExtractOptions,
+        ) -> Result<(), bit7z_rs::ArchiveError> {
+            Err(bit7z_rs::ArchiveError::UnsupportedOperation("mock".into()))
+        }
+        fn extract_to_buffer(
+            &self,
+            _: &std::path::Path,
+            _: u32,
+            _: Option<&password::Password>,
+        ) -> Result<Vec<u8>, bit7z_rs::ArchiveError> {
+            Err(bit7z_rs::ArchiveError::UnsupportedOperation("mock".into()))
+        }
+        fn test(
+            &self,
+            _: &std::path::Path,
+            _: Option<&password::Password>,
+        ) -> Result<TestResult, bit7z_rs::ArchiveError> {
+            Err(bit7z_rs::ArchiveError::UnsupportedOperation("mock".into()))
+        }
+        fn compress(
+            &self,
+            _: &[std::path::PathBuf],
+            _: &std::path::Path,
+            _: &CompressOptions,
+        ) -> Result<(), bit7z_rs::ArchiveError> {
+            Err(bit7z_rs::ArchiveError::UnsupportedOperation("mock".into()))
+        }
+        fn update(
+            &self,
+            _: &std::path::Path,
+            _: &[EngineOp],
+            _: Option<&password::Password>,
+        ) -> Result<(), bit7z_rs::ArchiveError> {
+            Err(bit7z_rs::ArchiveError::UnsupportedOperation("mock".into()))
+        }
+        fn is_encrypted(&self, _: &std::path::Path) -> Result<bool, bit7z_rs::ArchiveError> {
+            Ok(false)
+        }
+        fn is_header_encrypted(&self, _: &std::path::Path) -> Result<bool, bit7z_rs::ArchiveError> {
+            Ok(false)
+        }
+    }
+
+    fn file(index: u32, path: &str) -> ArchiveEntry {
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        ArchiveEntryBuilder::new(index, name, path).build()
+    }
+
+    fn dir(index: u32, path: &str) -> ArchiveEntry {
+        let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_string();
+        ArchiveEntryBuilder::new(index, name, path).dir().build()
+    }
+
+    fn sorted_ops(mut ops: Vec<EngineOp>) -> Vec<(u32, String)> {
+        ops.sort_by_key(|op| match op {
+            EngineOp::Rename { archive_index, .. } => *archive_index,
+            _ => u32::MAX,
+        });
+        ops.into_iter()
+            .map(|op| match op {
+                EngineOp::Rename {
+                    archive_index,
+                    new_path,
+                } => (archive_index, new_path),
+                _ => unreachable!("rename_ops only produces renames"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn directory_rename_expands_to_descendants() {
+        let engine = ListOnlyEngine(vec![
+            file(0, "readme.txt"),
+            dir(1, "docs/"),
+            file(2, "docs/a.txt"),
+            dir(3, "docs/sub/"),
+            file(4, "docs/sub/b.txt"),
+            dir(5, "other/"),
+        ]);
+        // The directory entry itself keeps its trailing slash in the listing.
+        let ops = rename_ops(&engine, Path::new("a.7z"), 1, "manual", None).unwrap();
+        assert_eq!(
+            sorted_ops(ops),
+            vec![
+                (1, "manual/".to_string()),
+                (2, "manual/a.txt".to_string()),
+                (3, "manual/sub/".to_string()),
+                (4, "manual/sub/b.txt".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn file_rename_stays_a_single_op() {
+        let engine = ListOnlyEngine(vec![
+            dir(1, "docs/"),
+            file(2, "docs/a.txt"),
+        ]);
+        let ops = rename_ops(&engine, Path::new("a.7z"), 2, "docs/b.txt", None).unwrap();
+        assert_eq!(
+            sorted_ops(ops),
+            vec![(2, "docs/b.txt".to_string())]
+        );
+    }
+
+    #[test]
+    fn rename_of_missing_index_is_an_error() {
+        let engine = ListOnlyEngine(vec![file(0, "a.txt")]);
+        assert!(rename_ops(&engine, Path::new("a.7z"), 9, "b.txt", None).is_err());
     }
 }
