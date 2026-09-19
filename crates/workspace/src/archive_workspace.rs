@@ -99,13 +99,9 @@ pub struct ArchiveWorkspace {
     /// must not block on it; while the lock is busy the strip renders this
     /// cache and refreshes on the next poll tick after the commit lands.
     changes_cache: Vec<ChangeEntry>,
-    /// Directory-only DFS listing of the working tree for the sidebar
-    /// navigation. Same lock-avoidance story as `changes_cache`: rebuilt
-    /// whenever the session lock happens to be free (bind / poll ticks),
-    /// never on the render path.
-    tree_rows: Vec<TreeRow>,
-    /// Digest of the overlay change state `tree_rows` was built from; a
-    /// poll tick skips the rebuild while it is unchanged.
+    /// Digest of the overlay change state, published for the sidebar: the
+    /// Files panel fetches directory levels lazily (see `dir_children`) and
+    /// rebuilds its materialized subtree when this digest moves.
     tree_fingerprint: u64,
     /// The archive-level comment (ZIP etc.), fetched in the background after
     /// open / password supply / commit; `None` when there is none (yet).
@@ -123,26 +119,36 @@ struct PendingOpen {
     password: Option<password::Password>,
 }
 
-/// One directory row of the sidebar tree (directories only). `path` is the
-/// archive-internal path ("" is the synthetic root); `depth` drives the
-/// indentation at render time.
+/// One directory level of the sidebar tree, fetched lazily from the working
+/// tree. `path` is the archive-internal path ("" is the synthetic root).
 #[derive(Clone, PartialEq)]
 pub(crate) struct TreeRow {
     pub(crate) path: String,
     pub(crate) name: String,
-    pub(crate) depth: usize,
-    /// Whether a collapse toggle is shown (only if subdirectories exist).
+    /// Whether the directory itself has subdirectories — drives the
+    /// disclosure marker before its children are ever fetched.
     pub(crate) has_subdirs: bool,
 }
 
-/// What the dock "Files" sidebar panel renders: a snapshot of one archive's
-/// folder tree plus its comment.
+/// Outcome of a lazy [`ArchiveWorkspace::dir_children`] query.
+pub(crate) enum DirChildren {
+    /// The directory's subdirectories, possibly none.
+    Found(Vec<TreeRow>),
+    /// The directory no longer exists in the working tree.
+    Missing,
+    /// The session mutex is busy (a commit is running); retry later.
+    Busy,
+}
+
+/// What the dock "Files" sidebar panel mirrors from the active archive:
+/// header data plus the overlay digest. The directory levels themselves are
+/// pulled on demand via [`ArchiveWorkspace::dir_children`].
 #[derive(Clone, PartialEq)]
 pub(crate) struct FilesTree {
     pub(crate) title: String,
     pub(crate) current_path: String,
-    pub(crate) rows: Vec<TreeRow>,
     pub(crate) comment: Option<String>,
+    pub(crate) fingerprint: u64,
 }
 
 impl EventEmitter<PanelEvent> for ArchiveWorkspace {}
@@ -207,7 +213,6 @@ impl ArchiveWorkspace {
             changes_open: false,
             changes_scroll: UniformListScrollHandle::new(),
             changes_cache: Vec::new(),
-            tree_rows: Vec::new(),
             tree_fingerprint: 0,
             comment: None,
             window: None,
@@ -257,7 +262,6 @@ impl ArchiveWorkspace {
                 changes_open: false,
                 changes_scroll: UniformListScrollHandle::new(),
                 changes_cache: Vec::new(),
-                tree_rows: Vec::new(),
                 tree_fingerprint: 0,
                 comment: None,
                 window: Some(window.window_handle()),
@@ -441,27 +445,23 @@ impl ArchiveWorkspace {
 
     fn bind_session(&mut self, session: Arc<Mutex<ArchiveSession>>, cx: &mut Context<Self>) {
         {
-            let archive = session
-                .lock()
-                .expect("session lock poisoned")
-                .archive_path()
-                .to_path_buf();
+            // The lock is known to be free right after a bind; take what the
+            // header and the sidebar's initial overlay digest need in one go.
+            let bound = session.lock().expect("session lock poisoned");
             settings::update(cx, |settings| {
-                settings.push_recent_archive(&archive.display().to_string());
+                settings.push_recent_archive(&bound.archive_path().display().to_string());
             });
+            self.title = bound
+                .archive_path()
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Archive".into())
+                .into();
+            self.tree_fingerprint = overlay_fingerprint(&bound);
         }
-        self.title = session
-            .lock()
-            .expect("session lock poisoned")
-            .archive_path()
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Archive".into())
-            .into();
         self.status = None;
         self.session = Some(session.clone());
         self.refresh_dirty(cx);
-        self.rebuild_tree();
         self.fetch_comment(cx);
         self.explorer
             .update(cx, |explorer, cx| explorer.set_session(session, cx));
@@ -505,16 +505,11 @@ impl ArchiveWorkspace {
                 // thread; keep the last known value meanwhile — `after_write`
                 // refreshes again once the commit lands.
                 match session.try_lock() {
-                    // The lock is free: refresh the sidebar tree cache too,
-                    // but only when the overlay actually changed — the watch
-                    // poll outruns the data by design and must not pay a
-                    // full-tree walk every tick.
-                    Ok(mut session) => {
-                        let fingerprint = overlay_fingerprint(&session);
-                        if fingerprint != self.tree_fingerprint {
-                            self.rebuild_tree_from(&session);
-                            self.tree_fingerprint = fingerprint;
-                        }
+                    // The lock is free: republish the sidebar's overlay
+                    // digest. The Files panel fetches its directory levels
+                    // lazily, so this is a cheap u64 — no full-tree walk.
+                    Ok(session) => {
+                        self.tree_fingerprint = overlay_fingerprint(&session);
                         session.has_changes()
                     }
                     Err(_) => return,
@@ -525,79 +520,6 @@ impl ArchiveWorkspace {
             self.dirty = dirty;
             cx.notify();
         }
-    }
-
-    /// Rebuilds the sidebar tree cache; call when the session lock is known
-    /// to be free (bind time).
-    fn rebuild_tree(&mut self) {
-        let Some(session) = self.session.clone() else {
-            self.tree_rows.clear();
-            return;
-        };
-        let session = session.lock().expect("session lock poisoned");
-        self.tree_fingerprint = overlay_fingerprint(&session);
-        self.rebuild_tree_from(&session);
-    }
-
-    /// Walks the working tree depth-first and collects its directories in
-    /// display order (natural name order per level), preceded by a synthetic
-    /// root row.
-    fn rebuild_tree_from(&mut self, session: &ArchiveSession) {
-        let tree = session.overlay().working();
-        let mut rows: Vec<TreeRow> = Vec::new();
-        fn walk(tree: &vfs::Tree, id: vfs::NodeId, depth: usize, rows: &mut Vec<TreeRow>) {
-            let Some(children) = tree.children(id) else {
-                return;
-            };
-            let mut dirs: Vec<vfs::NodeId> = children
-                .iter()
-                .copied()
-                .filter(|&child| {
-                    tree.node(child).is_some_and(|node| node.is_directory)
-                })
-                .collect();
-            dirs.sort_by(|a, b| {
-                let a_name = tree.node(*a).map(|n| n.name.clone()).unwrap_or_default();
-                let b_name = tree.node(*b).map(|n| n.name.clone()).unwrap_or_default();
-                explorer::model::natural_cmp(&a_name, &b_name)
-            });
-            for dir in dirs {
-                let Some(node) = tree.node(dir) else {
-                    continue;
-                };
-                let Some(path) = tree.path_of(dir) else {
-                    continue;
-                };
-                let has_subdirs = tree
-                    .children(dir)
-                    .is_some_and(|grand| {
-                        grand
-                            .iter()
-                            .any(|&child| tree.node(child).is_some_and(|n| n.is_directory))
-                    });
-                let name = node.name.clone();
-                rows.push(TreeRow {
-                    path,
-                    name,
-                    depth,
-                    has_subdirs,
-                });
-                walk(tree, dir, depth + 1, rows);
-            }
-        }
-        walk(tree, tree.root(), 0, &mut rows);
-        // The root row is always present: even a flat archive then shows an
-        // anchored "home" entry to navigate back to.
-        rows.insert(
-            0,
-            TreeRow {
-                path: String::new(),
-                name: String::new(),
-                depth: 0,
-                has_subdirs: !rows.is_empty(),
-            },
-        );
-        self.tree_rows = rows;
     }
 
     /// Re-reads the archive comment on the background executor (a header
@@ -768,9 +690,10 @@ impl ArchiveWorkspace {
     /// The staging strip under the file table: every dirty entry with its
     /// status letter; clicking a row toggles whether it takes part in the
     /// next commit.
-    /// The left sidebar panel (dock "Files" tab) reads this: a cheap clone of
-    /// everything it renders. Built purely from caches, never from the
-    /// session mutex.
+    /// The left sidebar panel (dock "Files" tab) reads this: a cheap header
+    /// describing the tree, while the directory levels themselves are fetched
+    /// lazily via [`Self::dir_children`]. Built purely from caches, never
+    /// from the session mutex.
     pub(crate) fn tree_snapshot(&self, cx: &App) -> Option<FilesTree> {
         if self.session.is_none() {
             return None;
@@ -778,9 +701,55 @@ impl ArchiveWorkspace {
         Some(FilesTree {
             title: self.title.to_string(),
             current_path: self.explorer.read(cx).current_path().to_string(),
-            rows: self.tree_rows.clone(),
             comment: self.comment.clone(),
+            fingerprint: self.tree_fingerprint,
         })
+    }
+
+    /// Fetches one level of the working tree: the subdirectories of `path`
+    /// ("" is the root) in display order. The sidebar calls this lazily as
+    /// the user expands nodes, so opening an archive no longer walks every
+    /// directory up front. `try_lock` keeps a running commit from blocking
+    /// the UI thread — the caller retries on a later poll tick instead.
+    pub(crate) fn dir_children(&self, path: &str) -> DirChildren {
+        let Some(session) = self.session.clone() else {
+            return DirChildren::Missing;
+        };
+        let Ok(session) = session.try_lock() else {
+            return DirChildren::Busy;
+        };
+        let tree = session.overlay().working();
+        let Some(dir) = tree.resolve_path(path) else {
+            return DirChildren::Missing;
+        };
+        let mut dirs: Vec<vfs::NodeId> = tree
+            .children(dir)
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+            .filter(|&child| tree.node(child).is_some_and(|node| node.is_directory))
+            .collect();
+        dirs.sort_by(|a, b| {
+            let a_name = tree.node(*a).map(|n| n.name.as_str()).unwrap_or_default();
+            let b_name = tree.node(*b).map(|n| n.name.as_str()).unwrap_or_default();
+            explorer::model::natural_cmp(a_name, b_name)
+        });
+        let rows = dirs
+            .iter()
+            .filter_map(|&dir| {
+                let node = tree.node(dir)?;
+                Some(TreeRow {
+                    path: tree.path_of(dir)?,
+                    name: node.name.clone(),
+                    has_subdirs: tree.children(dir).is_some_and(|grand| {
+                        grand
+                            .iter()
+                            .any(|&child| tree.node(child).is_some_and(|n| n.is_directory))
+                    }),
+                })
+            })
+            .collect();
+        DirChildren::Found(rows)
     }
 
     /// Sidebar navigation: enter the directory at `path` ("" is the root).
@@ -2258,14 +2227,12 @@ impl Render for ArchiveWorkspace {
                 .take(6)
                 .cloned()
                 .collect();
-            let weak = cx.weak_entity();
             let recent_list = if recent.is_empty() {
                 None
             } else {
                 let rows: Vec<gpui::AnyElement> = recent
                     .iter()
                     .map(|path| {
-                        let weak = weak.clone();
                         let path = path.clone();
                         div()
                             .id(SharedString::from(format!("recent-{path}")))
@@ -2278,18 +2245,19 @@ impl Render for ArchiveWorkspace {
                             .truncate()
                             .max_w(px(420.0))
                             .child(SharedString::from(path.clone()))
-                            .on_click(move |_, _, cx| {
+                            .on_click(move |_, window, cx| {
                                 let Some(host) = globals::host(cx) else {
                                     return;
                                 };
-                                let Some(window) = globals::host_window(cx) else {
-                                    return;
-                                };
                                 let path = PathBuf::from(&path);
-                                let _ = window.update(cx, |_, window, cx| {
-                                    let _ = host.update(cx, |host, cx| {
-                                        host.open_archive(path, window, cx, true)
-                                    });
+                                // Use the `window` the click handler already
+                                // carries: re-entering the window through
+                                // `globals::host_window().update()` fails —
+                                // the window is mid-update during dispatch —
+                                // and the swallowed error made these rows
+                                // dead.
+                                let _ = host.update(cx, |host, cx| {
+                                    host.open_archive(path, window, cx, true)
                                 });
                             })
                             .into_any_element()
@@ -2316,6 +2284,11 @@ impl Render for ArchiveWorkspace {
                         .flex_col()
                         .items_center()
                         .gap_3()
+                        // The recent list can outgrow the home area in a
+                        // short window; cap and clip instead of spilling
+                        // over the panel docked underneath.
+                        .max_h_full()
+                        .overflow_hidden()
                         .child(
                             div()
                                 .text_sm()
