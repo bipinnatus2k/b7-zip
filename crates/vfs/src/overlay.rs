@@ -306,11 +306,21 @@ impl Overlay {
             let Some(path) = self.base.path_of(id) else {
                 continue;
             };
-            let Some(index) = new_index_of(&path) else {
+            let Some(node) = self.base.node_mut(id) else {
                 continue;
             };
-            if let Some(node) = self.base.node_mut(id) {
-                node.set_attr(crate::attr::ARCHIVE_INDEX, crate::attr::AttrValue::UInt(index as u64));
+            match new_index_of(&path) {
+                Some(index) => {
+                    node.set_attr(crate::attr::ARCHIVE_INDEX, crate::attr::AttrValue::UInt(index as u64));
+                }
+                None => {
+                    // The entry is gone from the archive (e.g. a commit that
+                    // failed halfway through its rewrite). Drop the stale
+                    // index so no later op can address it; nodes without an
+                    // index are skipped by the diff instead of deleted by a
+                    // wrong number.
+                    node.remove_attr(crate::attr::ARCHIVE_INDEX);
+                }
             }
         }
     }
@@ -696,6 +706,22 @@ mod tests {
         // A synthetic dir without an archive entry keeps its absent index.
         let dir = overlay.base().resolve_path("dir").unwrap();
         assert_eq!(overlay.base().node(dir).unwrap().archive_index(), None);
+    }
+
+    #[test]
+    fn reindex_base_drops_indices_of_vanished_entries() {
+        let mut overlay = Overlay::new(sample_base());
+        // Simulate a rewrite that failed after deleting `a.txt`: the fresh
+        // listing no longer contains it, so its stale index must be dropped
+        // instead of surviving for a later op to act on.
+        overlay.reindex_base(|path| match path {
+            "dir/b.txt" => Some(0),
+            _ => None,
+        });
+        let a = overlay.base().resolve_path("a.txt").unwrap();
+        assert_eq!(overlay.base().node(a).unwrap().archive_index(), None);
+        let b = overlay.base().resolve_path("dir/b.txt").unwrap();
+        assert_eq!(overlay.base().node(b).unwrap().archive_index(), Some(0));
     }
 
     #[test]

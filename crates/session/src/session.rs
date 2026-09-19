@@ -243,12 +243,16 @@ impl ArchiveSession {
         committed: &Changeset,
         fold: impl FnOnce(&mut Overlay),
     ) -> Result<(), SessionError> {
+        // A previous rewrite may have failed halfway through and left the
+        // archive renumbered (stale_indices set by `update` failing after
+        // `editor.apply`, or by a failed re-list). No commit may build ops
+        // from stale indices, so refresh first on both paths.
+        self.retry_index_refresh_if_stale()?;
         if committed.is_empty() {
             // Dirty entries that cannot be mapped to archive operations
             // (e.g. a modified synthetic directory) must not leave the
             // session permanently dirty.
             fold(&mut self.overlay);
-            self.retry_index_refresh_if_stale()?;
             return Ok(());
         }
         let ops = task::changeset_to_ops(committed);
