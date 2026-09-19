@@ -25,10 +25,12 @@ const MAIN_DOCK_AREA: DockAreaTab = DockAreaTab {
     version: DOCK_AREA_VERSION,
 };
 
-#[cfg(debug_assertions)]
-const STATE_FILE: &str = "target/dock-tabs.json";
-#[cfg(not(debug_assertions))]
-const STATE_FILE: &str = "dock-tabs.json";
+/// The dock layout persists in the app's state directory — never CWD-relative
+/// (a CWD-relative path silently broke load/save for every launch whose
+/// working directory wasn't the repo root).
+fn state_file() -> PathBuf {
+    paths::state_dir().join("dock-tabs.json")
+}
 
 /// Which region of the layout a panel kind belongs to. The rule is keyed by
 /// `panel_name`, so it survives save/load round trips.
@@ -258,7 +260,12 @@ impl MultiWorkspace {
         home.update(cx, |home, _| home.set_window(window_handle));
 
         match Self::load_layout(dock_area.clone(), window, cx) {
-            Ok(()) => {}
+            Ok(true) => {}
+            // No saved layout yet (fresh install): build the default
+            // quietly — this is the normal first-run path, not an error.
+            Ok(false) => {
+                Self::reset_default_layout(weak_dock_area.clone(), &home, window, cx);
+            }
             Err(err) => {
                 eprintln!("load layout error: {err:?}");
                 Self::reset_default_layout(weak_dock_area.clone(), &home, window, cx);
@@ -540,16 +547,27 @@ impl MultiWorkspace {
 
     fn save_state(state: &DockAreaState) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(state)?;
-        std::fs::write(STATE_FILE, json)?;
+        let file = state_file();
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(file, json)?;
         Ok(())
     }
 
+    /// Restores the saved dock layout, if any. Returns `Ok(false)` when no
+    /// layout file exists yet (a fresh install is not an error — the caller
+    /// just builds the default layout).
     fn load_layout(
         dock_area: Entity<DockArea>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> anyhow::Result<()> {
-        let json = std::fs::read_to_string(STATE_FILE)?;
+    ) -> anyhow::Result<bool> {
+        let file = state_file();
+        if !file.exists() {
+            return Ok(false);
+        }
+        let json = std::fs::read_to_string(file)?;
         let state = serde_json::from_str::<DockAreaState>(&json)?;
 
         // Bump DOCK_AREA_VERSION when the default layout changes; offer the
@@ -584,7 +602,8 @@ impl MultiWorkspace {
             }
 
             Ok::<(), anyhow::Error>(())
-        })
+        })?;
+        Ok(true)
     }
 
     fn reset_default_layout(
