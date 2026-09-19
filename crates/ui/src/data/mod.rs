@@ -1,4 +1,5 @@
 pub mod dataview;
+pub mod table_view;
 
 use gpui::{AnyElement, App, Window};
 

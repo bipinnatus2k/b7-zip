@@ -132,11 +132,17 @@ impl RenderOnce for Responsive {
                 }
             })
             .id(self.ident.element_id())
-            .w_full()
-            // The measured child is a full-width wrapper rather than the
-            // caller's element, so the reading is the room the container had
-            // and not the room its content chose to take.
-            .child(div().w_full().child(content))
+            // Fill the room the container gave: the measured child must
+            // *occupy* that space, or content built with `size_full` inside
+            // resolves its percentages against an auto-height wrapper and
+            // collapses to zero (a plain div defaults to block layout, whose
+            // children never stretch). This is what makes the height reading
+            // honest too — an auto-height wrapper would report the content's
+            // own height, not the room the container provided.
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().child(content))
     }
 }
 
