@@ -275,6 +275,9 @@ fn main() {
             .unwrap_or(0)
     );
 
+    // Clear dirs left by previous runs before this process creates its own.
+    crashes::cleanup_stale_handler_dirs(paths::temp_dir());
+
     let crash_handler = if should_install_crash_handler {
         Some(
             app.background_executor().spawn(crashes::init(
