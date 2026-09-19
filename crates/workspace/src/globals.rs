@@ -35,6 +35,17 @@ pub struct DockAreaGlobal(Option<gpui::WeakEntity<gpui_kit::component::dock::Doc
 
 impl Global for DockAreaGlobal {}
 
+/// The archive workspace whose tab is currently displayed. Stamped by
+/// `ArchiveWorkspace::render` — a hidden dock tab never renders, so the last
+/// visible tab wins with no event plumbing. Single-slot by the same
+/// concession as the other host globals (multi-window overwrite is accepted
+/// debt); home tabs never stamp, so the tree keeps showing the last archive
+/// while the home tab is on screen.
+#[derive(Default)]
+pub struct ActiveArchiveGlobal(Option<WeakEntity<ArchiveWorkspace>>);
+
+impl Global for ActiveArchiveGlobal {}
+
 /// Maps dock panel ids to their workspace entity so the tab bar can ask a
 /// panel whether it is dirty before closing it, without downcasting views.
 #[derive(Default)]
@@ -78,6 +89,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(DockAreaGlobal::default());
     cx.set_global(HostGlobal::default());
     cx.set_global(HostWindowGlobal::default());
+    cx.set_global(ActiveArchiveGlobal::default());
 }
 
 pub fn set_host(cx: &mut App, host: WeakEntity<crate::multi_workspace::MultiWorkspace>) {
@@ -101,6 +113,17 @@ pub fn set_host_window(cx: &mut App, handle: gpui::AnyWindowHandle) {
 
 pub fn host_window(cx: &App) -> Option<gpui::AnyWindowHandle> {
     cx.global::<HostWindowGlobal>().0
+}
+
+/// Marks `workspace` as the currently displayed archive tab. Called from its
+/// render, which only runs while the tab is visible.
+pub fn set_active_archive(cx: &mut App, workspace: WeakEntity<ArchiveWorkspace>) {
+    cx.global_mut::<ActiveArchiveGlobal>().0 = Some(workspace);
+}
+
+/// The archive tab currently on screen, if any (home tabs don't count).
+pub fn active_archive(cx: &App) -> Option<WeakEntity<ArchiveWorkspace>> {
+    cx.global::<ActiveArchiveGlobal>().0.clone()
 }
 
 /// All other open archive workspaces, as (title, session) pairs. Used by the

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::archive_workspace::ArchiveWorkspace;
 use crate::diff_panel::{self, DiffPanel};
 use crate::settings_panel::SettingsPanel;
-pub(crate) use crate::panels::sidebar::SidebarPanel;
+pub(crate) use crate::panels::sidebar::{FilesPanel, SidebarPanel};
 
 pub mod sidebar;
 
@@ -67,7 +67,7 @@ pub(crate) fn register_panels(cx: &mut App) {
         panel_handle(cx.new(|cx| crate::settings_panel::SettingsPanel::new(window, cx)))
     });
     register_panel(cx, "FilesPanel", |_, _, cx| {
-        panel_handle(SidebarPanel::files(cx))
+        panel_handle(FilesPanel::new(cx))
     });
     register_panel(cx, "OutlinePanel", |_, _, cx| {
         panel_handle(SidebarPanel::outline(cx))

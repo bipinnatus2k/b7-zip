@@ -603,7 +603,7 @@ impl MultiWorkspace {
 
         // The left dock holds its own tab group.
         let left = DockLayout::tabs()
-            .panel_view(panel_handle(panels::SidebarPanel::files(cx)), cx)
+            .panel_view(panel_handle(panels::FilesPanel::new(cx)), cx)
             .panel_view(panel_handle(panels::SidebarPanel::outline(cx)), cx);
 
         let bottom = DockLayout::tabs().panel_view(panel_handle(panels::SidebarPanel::output(cx)), cx);

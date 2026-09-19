@@ -43,12 +43,22 @@ actions!(
         RenameEntry,
         /// Navigates the active workspace to its parent directory.
         NavigateUp,
+        /// Activates the selected entry: enters a folder, views a file.
+        OpenSelected,
+        /// Selects every entry of the active directory.
+        SelectAllEntries,
         /// Shows or hides the changes (staging) panel.
         ToggleChanges,
         /// Compares the active workspace against its base.
         DiffWithBase,
         /// Compares two open workspaces with each other.
         DiffWorkspaces,
+        /// Shows the properties dialog for the selection.
+        ShowProperties,
+        /// Copies the selected entries' full archive paths to the clipboard.
+        CopySelectedPaths,
+        /// Computes checksums for the selected files.
+        ChecksumSelected,
         /// Shows or hides the DevTools panel (dev builds only).
         ToggleDevTools,
         /// Opens the settings panel.

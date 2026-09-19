@@ -10097,6 +10097,7 @@ dependencies = [
  "app_action",
  "bit7z-explorer",
  "bit7z-rs",
+ "checksum",
  "compare",
  "crashes",
  "dunce",
@@ -10114,6 +10115,7 @@ dependencies = [
  "settings",
  "task",
  "temp",
+ "tray",
  "ui",
  "vfs",
 ]

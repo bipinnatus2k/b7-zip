@@ -4,14 +4,20 @@
 
 use crate::diff_panel::{DiffContentProvider, DiffPanel, Side};
 use crate::globals;
+use app_action::{
+    AddFiles, ChecksumSelected, CommitStaged, CopySelectedPaths, DeleteSelected, DiffWithBase,
+    DiffWorkspaces, DiscardUnstaged, ExtractSelected, NavigateUp, OpenSelected, RenameEntry,
+    SelectAllEntries, ShowProperties, StageSelected, TestActiveArchive, ToggleChanges,
+    UnstageSelected,
+};
 use compare::{DiffReport, tree_vs_tree};
 use explorer::explorer::{ArchiveExplorer, ExplorerCommand, ExplorerEvent};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Action as _, AnyWindowHandle, App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, PromptLevel, Render, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, Task, UniformListScrollHandle, WeakEntity,
-    Window, div, hsla, px, uniform_list,
+    Action as _, AnyWindowHandle, App, AppContext, ClipboardItem, Context, Div, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
+    PromptLevel, Render, SharedString, Stateful, StatefulInteractiveElement, Styled, Task,
+    UniformListScrollHandle, WeakEntity, Window, div, hsla, px, uniform_list,
 };
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -32,6 +38,16 @@ const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(700);
 
 /// Height of the staging (changes) strip under the file table.
 const CHANGES_STRIP_HEIGHT: f32 = 190.0;
+
+/// Digests the Checksum command computes, in dialog order.
+const CHECKSUM_ALGORITHMS: [checksum::ChecksumAlgorithm; 6] = [
+    checksum::ChecksumAlgorithm::Crc32,
+    checksum::ChecksumAlgorithm::Crc64,
+    checksum::ChecksumAlgorithm::Md5,
+    checksum::ChecksumAlgorithm::Sha1,
+    checksum::ChecksumAlgorithm::Sha256,
+    checksum::ChecksumAlgorithm::Sha512,
+];
 
 pub struct ArchiveWorkspace {
     focus_handle: FocusHandle,
@@ -61,6 +77,14 @@ pub struct ArchiveWorkspace {
     /// must not block on it; while the lock is busy the strip renders this
     /// cache and refreshes on the next poll tick after the commit lands.
     changes_cache: Vec<ChangeEntry>,
+    /// Directory-only DFS listing of the working tree for the sidebar
+    /// navigation. Same lock-avoidance story as `changes_cache`: rebuilt
+    /// whenever the session lock happens to be free (bind / poll ticks),
+    /// never on the render path.
+    tree_rows: Vec<TreeRow>,
+    /// The archive-level comment (ZIP etc.), fetched in the background after
+    /// open / password supply / commit; `None` when there is none (yet).
+    comment: Option<String>,
     /// The hosting window, for prompts and dialogs raised from events that
     /// carry no window. Filled by the host right after creation.
     window: Option<AnyWindowHandle>,
@@ -72,6 +96,28 @@ pub struct ArchiveWorkspace {
 struct PendingOpen {
     path: PathBuf,
     password: Option<password::Password>,
+}
+
+/// One directory row of the sidebar tree (directories only). `path` is the
+/// archive-internal path ("" is the synthetic root); `depth` drives the
+/// indentation at render time.
+#[derive(Clone, PartialEq)]
+pub(crate) struct TreeRow {
+    pub(crate) path: String,
+    pub(crate) name: String,
+    pub(crate) depth: usize,
+    /// Whether a collapse toggle is shown (only if subdirectories exist).
+    pub(crate) has_subdirs: bool,
+}
+
+/// What the dock "Files" sidebar panel renders: a snapshot of one archive's
+/// folder tree plus its comment.
+#[derive(Clone, PartialEq)]
+pub(crate) struct FilesTree {
+    pub(crate) title: String,
+    pub(crate) current_path: String,
+    pub(crate) rows: Vec<TreeRow>,
+    pub(crate) comment: Option<String>,
 }
 
 impl EventEmitter<PanelEvent> for ArchiveWorkspace {}
@@ -136,6 +182,8 @@ impl ArchiveWorkspace {
             changes_open: false,
             changes_scroll: UniformListScrollHandle::new(),
             changes_cache: Vec::new(),
+            tree_rows: Vec::new(),
+            comment: None,
             window: None,
             _subscriptions: subscriptions,
             _watch: None,
@@ -183,6 +231,8 @@ impl ArchiveWorkspace {
                 changes_open: false,
                 changes_scroll: UniformListScrollHandle::new(),
                 changes_cache: Vec::new(),
+                tree_rows: Vec::new(),
+                comment: None,
                 window: Some(window.window_handle()),
                 _subscriptions: subscriptions,
                 _watch: None,
@@ -324,6 +374,7 @@ impl ArchiveWorkspace {
                     .set_password(Some(password::Password::new(password)));
                 self.needs_password = false;
                 self.status = Some("Password set — retry the operation".into());
+                self.fetch_comment(cx);
                 cx.notify();
             }
             return;
@@ -383,6 +434,8 @@ impl ArchiveWorkspace {
         self.status = None;
         self.session = Some(session.clone());
         self.refresh_dirty(cx);
+        self.rebuild_tree();
+        self.fetch_comment(cx);
         self.explorer
             .update(cx, |explorer, cx| explorer.set_session(session, cx));
         self.start_watch_loop(cx);
@@ -417,7 +470,7 @@ impl ArchiveWorkspace {
     }
 
     fn refresh_dirty(&mut self, cx: &mut Context<Self>) {
-        let dirty = match self.session.as_ref() {
+        let dirty = match self.session.clone() {
             None => false,
             Some(session) => {
                 // `try_lock` so a long-running commit (which holds this
@@ -425,7 +478,12 @@ impl ArchiveWorkspace {
                 // thread; keep the last known value meanwhile — `after_write`
                 // refreshes again once the commit lands.
                 match session.try_lock() {
-                    Ok(session) => session.has_changes(),
+                    // The lock is free: also refresh the sidebar tree cache,
+                    // which shares the same lock-avoidance story.
+                    Ok(mut session) => {
+                        self.rebuild_tree_from(&session);
+                        session.has_changes()
+                    }
                     Err(_) => return,
                 }
             }
@@ -434,6 +492,101 @@ impl ArchiveWorkspace {
             self.dirty = dirty;
             cx.notify();
         }
+    }
+
+    /// Rebuilds the sidebar tree cache; call when the session lock is known
+    /// to be free (bind time).
+    fn rebuild_tree(&mut self) {
+        let Some(session) = self.session.clone() else {
+            self.tree_rows.clear();
+            return;
+        };
+        let session = session.lock().expect("session lock poisoned");
+        self.rebuild_tree_from(&session);
+    }
+
+    /// Walks the working tree depth-first and collects its directories in
+    /// display order (natural name order per level), preceded by a synthetic
+    /// root row.
+    fn rebuild_tree_from(&mut self, session: &ArchiveSession) {
+        let tree = session.overlay().working();
+        let mut rows: Vec<TreeRow> = Vec::new();
+        fn walk(tree: &vfs::Tree, id: vfs::NodeId, depth: usize, rows: &mut Vec<TreeRow>) {
+            let Some(children) = tree.children(id) else {
+                return;
+            };
+            let mut dirs: Vec<vfs::NodeId> = children
+                .iter()
+                .copied()
+                .filter(|&child| {
+                    tree.node(child).is_some_and(|node| node.is_directory)
+                })
+                .collect();
+            dirs.sort_by(|a, b| {
+                let a_name = tree.node(*a).map(|n| n.name.clone()).unwrap_or_default();
+                let b_name = tree.node(*b).map(|n| n.name.clone()).unwrap_or_default();
+                explorer::model::natural_cmp(&a_name, &b_name)
+            });
+            for dir in dirs {
+                let Some(node) = tree.node(dir) else {
+                    continue;
+                };
+                let Some(path) = tree.path_of(dir) else {
+                    continue;
+                };
+                let has_subdirs = tree
+                    .children(dir)
+                    .is_some_and(|grand| {
+                        grand
+                            .iter()
+                            .any(|&child| tree.node(child).is_some_and(|n| n.is_directory))
+                    });
+                let name = node.name.clone();
+                rows.push(TreeRow {
+                    path,
+                    name,
+                    depth,
+                    has_subdirs,
+                });
+                walk(tree, dir, depth + 1, rows);
+            }
+        }
+        walk(tree, tree.root(), 0, &mut rows);
+        // The root row is always present: even a flat archive then shows an
+        // anchored "home" entry to navigate back to.
+        rows.insert(
+            0,
+            TreeRow {
+                path: String::new(),
+                name: String::new(),
+                depth: 0,
+                has_subdirs: !rows.is_empty(),
+            },
+        );
+        self.tree_rows = rows;
+    }
+
+    /// Re-reads the archive comment on the background executor (a header
+    /// read; cheap) and updates the sidebar.
+    fn fetch_comment(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let weak = cx.weak_entity();
+        cx.spawn(async move |_, cx| {
+        let comment = cx
+            .background_executor()
+            .spawn(async move {
+                let session = session.lock().expect("session lock poisoned");
+                session.comment()
+            })
+            .await;
+            let _ = weak.update(cx, |this, cx| {
+                this.comment = comment.ok().flatten().filter(|c| !c.trim().is_empty());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -556,6 +709,8 @@ impl ArchiveWorkspace {
             Err(err) => self.status = Some(format!("Write failed: {err}").into()),
         }
         self.refresh_dirty(cx);
+        // A rewrite can drop or rewrite the archive comment; re-read it.
+        self.fetch_comment(cx);
         self.explorer
             .update(cx, |explorer, cx| explorer.refresh(cx));
         cx.notify();
@@ -573,6 +728,26 @@ impl ArchiveWorkspace {
     /// The staging strip under the file table: every dirty entry with its
     /// status letter; clicking a row toggles whether it takes part in the
     /// next commit.
+    /// The left sidebar panel (dock "Files" tab) reads this: a cheap clone of
+    /// everything it renders. Built purely from caches, never from the
+    /// session mutex.
+    pub(crate) fn tree_snapshot(&self, cx: &App) -> Option<FilesTree> {
+        if self.session.is_none() {
+            return None;
+        }
+        Some(FilesTree {
+            title: self.title.to_string(),
+            current_path: self.explorer.read(cx).current_path().to_string(),
+            rows: self.tree_rows.clone(),
+            comment: self.comment.clone(),
+        })
+    }
+
+    /// Sidebar navigation: enter the directory at `path` ("" is the root).
+    pub fn navigate_tree(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.explorer.update(cx, |explorer, cx| explorer.navigate(path, cx));
+    }
+
     fn render_changes_strip(
         &mut self,
         changes: &[ChangeEntry],
@@ -726,11 +901,327 @@ impl ArchiveWorkspace {
 
     fn on_explorer_event(&mut self, event: ExplorerEvent, cx: &mut Context<Self>) {
         match event {
-            ExplorerEvent::Activated(ix) => self.view_file(ix, cx),
+            ExplorerEvent::Activated(ix) => {
+                // A directory activates into navigation (the old explorer's
+                // double-click behavior); a file opens with its association.
+                let row = self.explorer.read(cx).rows(cx).get(ix).cloned();
+                match row {
+                    Some(row) if row.is_directory => {
+                        let path = row.path;
+                        self.explorer
+                            .update(cx, |explorer, cx| explorer.navigate(&path, cx));
+                    }
+                    Some(_) => self.view_file(ix, cx),
+                    None => return,
+                }
+            }
             ExplorerEvent::SelectionChanged(_) => cx.notify(),
             ExplorerEvent::Command(ExplorerCommand::Delete) => self.delete_selected(cx),
             ExplorerEvent::Command(ExplorerCommand::Rename) => self.rename_selected(cx),
         }
+    }
+
+    // --- Action handlers ---------------------------------------------------
+    //
+    // The explorer's context menu (and future keybindings) dispatch unit
+    // actions; they resolve against the explorer's current selection, which
+    // the right-clicked row is part of by the time a command runs.
+
+    fn on_extract_selected(
+        &mut self,
+        _: &ExtractSelected,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.extract_selected(window, cx);
+    }
+
+    fn on_add_files(&mut self, _: &AddFiles, _: &mut Window, cx: &mut Context<Self>) {
+        self.add_files(cx);
+    }
+
+    fn on_rename_entry(&mut self, _: &RenameEntry, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename_selected_in(window, cx);
+    }
+
+    fn on_delete_selected(&mut self, _: &DeleteSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.delete_selected(cx);
+    }
+
+    fn on_test_active_archive(
+        &mut self,
+        _: &TestActiveArchive,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.test_archive(cx);
+    }
+
+    fn on_navigate_up(&mut self, _: &NavigateUp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_some() {
+            self.explorer.update(cx, |explorer, cx| explorer.navigate_up(cx));
+        }
+    }
+
+    fn on_open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(ix) = self.explorer.read(cx).active_index(cx) else {
+            return;
+        };
+        let Some(row) = self.explorer.read(cx).rows(cx).get(ix).cloned() else {
+            return;
+        };
+        if row.is_directory {
+            let path = row.path;
+            self.explorer.update(cx, |explorer, cx| explorer.navigate(&path, cx));
+        } else {
+            self.view_file(ix, cx);
+        }
+    }
+
+    fn on_select_all_entries(
+        &mut self,
+        _: &SelectAllEntries,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session.is_some() {
+            self.explorer.update(cx, |explorer, cx| explorer.select_all_rows(cx));
+        }
+    }
+
+    fn on_toggle_changes(&mut self, _: &ToggleChanges, _: &mut Window, cx: &mut Context<Self>) {
+        if self.session.is_some() {
+            self.changes_open = !self.changes_open;
+            cx.notify();
+        }
+    }
+
+    fn on_commit_staged(&mut self, _: &CommitStaged, _: &mut Window, cx: &mut Context<Self>) {
+        if self.dirty {
+            self.commit_and_notify(cx);
+        }
+    }
+
+    fn on_discard_unstaged(&mut self, _: &DiscardUnstaged, _: &mut Window, cx: &mut Context<Self>) {
+        if self.dirty {
+            self.discard_unstaged_changes(cx);
+        }
+    }
+
+    fn on_stage_selected(&mut self, _: &StageSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.stage_selected(true, cx);
+    }
+
+    fn on_unstage_selected(&mut self, _: &UnstageSelected, _: &mut Window, cx: &mut Context<Self>) {
+        self.stage_selected(false, cx);
+    }
+
+    fn on_diff_with_base(&mut self, _: &DiffWithBase, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_diff_panel(window, cx);
+    }
+
+    fn on_diff_workspaces(
+        &mut self,
+        _: &DiffWorkspaces,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.compare_with(window, cx);
+    }
+
+    fn on_show_properties(
+        &mut self,
+        _: &ShowProperties,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_properties(window, cx);
+    }
+
+    fn on_copy_selected_paths(
+        &mut self,
+        _: &CopySelectedPaths,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.copy_selected_paths(cx);
+    }
+
+    fn on_checksum_selected(
+        &mut self,
+        _: &ChecksumSelected,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.checksum_selected(cx);
+    }
+
+    /// Stages (or unstages) the selected rows' subtrees.
+    fn stage_selected(&mut self, stage: bool, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let ids: Vec<vfs::NodeId> = self
+            .explorer
+            .read(cx)
+            .selected_rows(cx)
+            .iter()
+            .map(|row| row.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        {
+            let mut session = session.lock().expect("session lock poisoned");
+            if stage {
+                session.stage(ids);
+            } else {
+                session.unstage(ids);
+            }
+        }
+        self.refresh_dirty(cx);
+        cx.notify();
+    }
+
+    fn copy_selected_paths(&mut self, cx: &mut Context<Self>) {
+        let rows = self.explorer.read(cx).selected_rows(cx);
+        if rows.is_empty() {
+            self.status = Some("Select entries to copy".into());
+            cx.notify();
+            return;
+        }
+        let text = rows
+            .iter()
+            .map(|row| row.path.clone())
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.status = Some(format!("Copied {} path(s)", rows.len()).into());
+        cx.notify();
+    }
+
+    /// Computes digests for the selected files: entries are extracted into
+    /// the work dir (already-extracted ones are reused) and hashed on the
+    /// background executor; the digest table then opens as a dialog.
+    fn checksum_selected(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.session.clone() else {
+            return;
+        };
+        let targets: Vec<(String, u32)> = self
+            .explorer
+            .read(cx)
+            .selected_rows(cx)
+            .iter()
+            .filter_map(|row| row.index.map(|index| (row.name.clone(), index)))
+            .collect();
+        if targets.is_empty() {
+            self.status = Some("Select files to checksum".into());
+            cx.notify();
+            return;
+        }
+        let window = self.window;
+        self.status = Some(
+            format!(
+                "Computing checksums for {} file(s)…",
+                targets.len()
+            )
+            .into(),
+        );
+        cx.notify();
+        cx.spawn(async move |_, cx| {
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut results = Vec::new();
+                    for (name, index) in targets {
+                        let extracted = {
+                            let mut session = session.lock().expect("session lock poisoned");
+                            session.extract_to_workdir(index)
+                        };
+                        match extracted {
+                            Ok(path) => {
+                                let digests: Vec<(SharedString, SharedString)> =
+                                    CHECKSUM_ALGORITHMS
+                                        .iter()
+                                        .copied()
+                                        .map(|algorithm| {
+                                            let label = SharedString::from(algorithm.name());
+                                            match checksum::checksum_file(&path, algorithm) {
+                                                Ok(result) => (label, result.digest.into()),
+                                                Err(err) => {
+                                                    (label, format!("error: {err}").into())
+                                                }
+                                            }
+                                        })
+                                        .collect();
+                                results.push((name, digests));
+                            }
+                            Err(err) => {
+                                results.push((
+                                    name,
+                                    vec![("Error".into(), err.to_string().into())],
+                                ));
+                            }
+                        }
+                    }
+                    results
+                })
+                .await;
+            let Some(window) = window else {
+                return;
+            };
+            let _ = window.update(cx, |_, window, cx| {
+                window.open_dialog(cx, move |dialog, _window, cx| {
+                    let muted = cx.theme().muted_foreground;
+                    let results = results.clone();
+                    let items: Vec<gpui::AnyElement> = results
+                        .into_iter()
+                        .map(|(name, digests)| {
+                            let rows: Vec<gpui::AnyElement> = digests
+                                .into_iter()
+                                .map(|(label, digest)| {
+                                    div()
+                                        .flex()
+                                        .flex_row()
+                                        .gap_3()
+                                        .py_0p5()
+                                        .child(
+                                            div()
+                                                .w(px(70.0))
+                                                .flex_shrink_0()
+                                                .text_xs()
+                                                .text_color(muted)
+                                                .child(label),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .truncate()
+                                                .text_xs()
+                                                .child(digest),
+                                        )
+                                        .into_any_element()
+                                })
+                                .collect();
+                            div()
+                                .flex()
+                                .flex_col()
+                                .py_1()
+                                .child(div().text_xs().child(name))
+                                .children(rows)
+                                .into_any_element()
+                        })
+                        .collect();
+                    let _ = _window;
+                    dialog
+                        .title("Checksums")
+                        .w(px(620.0))
+                        .child(div().p_3().flex().flex_col().children(items))
+                });
+            });
+        })
+        .detach();
     }
 
     /// Extracts the activated file entry into the session work dir and opens
@@ -1493,6 +1984,12 @@ impl ArchiveWorkspace {
 
 impl Render for ArchiveWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A hidden dock tab never renders, so this stamp is how the dock
+        // "Files" panel knows which archive is on screen.
+        if self.session.is_some() {
+            let entity = cx.entity();
+            globals::set_active_archive(cx, entity.downgrade());
+        }
         let theme = cx.theme();
         let (muted, border) = (theme.muted_foreground, theme.border);
         let changes = self.snapshot_changes();
@@ -1814,6 +2311,24 @@ impl Render for ArchiveWorkspace {
         div()
             .id("archive-workspace")
             .track_focus(&self.focus_handle)
+            .on_action(cx.listener(Self::on_extract_selected))
+            .on_action(cx.listener(Self::on_add_files))
+            .on_action(cx.listener(Self::on_rename_entry))
+            .on_action(cx.listener(Self::on_delete_selected))
+            .on_action(cx.listener(Self::on_test_active_archive))
+            .on_action(cx.listener(Self::on_navigate_up))
+            .on_action(cx.listener(Self::on_open_selected))
+            .on_action(cx.listener(Self::on_select_all_entries))
+            .on_action(cx.listener(Self::on_toggle_changes))
+            .on_action(cx.listener(Self::on_commit_staged))
+            .on_action(cx.listener(Self::on_discard_unstaged))
+            .on_action(cx.listener(Self::on_stage_selected))
+            .on_action(cx.listener(Self::on_unstage_selected))
+            .on_action(cx.listener(Self::on_diff_with_base))
+            .on_action(cx.listener(Self::on_diff_workspaces))
+            .on_action(cx.listener(Self::on_show_properties))
+            .on_action(cx.listener(Self::on_copy_selected_paths))
+            .on_action(cx.listener(Self::on_checksum_selected))
             .size_full()
             .flex()
             .flex_col()
