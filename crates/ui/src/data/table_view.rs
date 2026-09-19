@@ -39,7 +39,7 @@ use std::rc::Rc;
 use gpui::prelude::*;
 use gpui::{
     div, px, uniform_list, AnyElement, App, Bounds, Context, Div, DragMoveEvent, EntityId,
-    EventEmitter, FocusHandle, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, Pixels,
+    EventEmitter, FocusHandle, KeyDownEvent, MouseButton, MouseDownEvent, Pixels,
     ScrollStrategy, SharedString, Subscription, UniformListScrollHandle, WeakEntity, Window,
 };
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
@@ -56,8 +56,8 @@ pub enum TableViewEvent {
     SelectionChanged(Vec<usize>),
     /// A row was activated by double-click or Enter.
     Activated(usize),
-    /// The sort changed: `Some((column index, dir))`, or `None` when cleared.
-    Sorted(Option<(usize, SortDir)>),
+    /// The sort changed: `Some((column id, dir))`, or `None` when cleared.
+    Sorted(Option<(u64, SortDir)>),
     /// A column was drag-resized to `width` (column identified by its
     /// [`Column::id`], which survives reordering).
     Resized(u64, f32),
@@ -206,13 +206,14 @@ struct ResizeDrag {
 }
 
 /// Drag payload for header reordering (see [`TableView::reorderable`]).
+/// Drops are element-scoped (`.on_drop` on the target header), so unlike
+/// [`ResizeDrag`] no owner id is needed.
 struct HeaderDrag {
-    owner: EntityId,
     column: usize,
 }
 
 /// Resolved width policy for one column.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ColWidth {
     Fixed(f32),
     Flex(f32, f32), // (grow factor, min width)
@@ -226,12 +227,16 @@ pub struct TableView<T: 'static> {
     focus: FocusHandle,
     selection_mode: SelectionMode,
     selection: SelectionState,
-    sort: Option<(usize, SortDir)>,
+    /// The active sort, keyed by [`Column::id`] so it survives reordering
+    /// and column-list rebuilds.
+    sort: Option<(u64, SortDir)>,
     /// Source index of each visible row, in display order. Recomputed at the
     /// top of every render; listeners map display → source through it.
     display_order: Vec<usize>,
-    /// Columns converted to fixed widths by drag-resizing.
-    resized: HashMap<usize, f32>,
+    /// Columns converted to fixed widths by drag-resizing, keyed by
+    /// [`Column::id`] so widths travel with their column through reorders
+    /// and rebuilds.
+    resized: HashMap<u64, f32>,
     /// Header-cell bounds captured after prepaint, for resize math.
     header_bounds: Vec<Bounds<Pixels>>,
     /// The `bind_rows` observer; dropped (cancelled) by `set_rows`/rebinding.
@@ -382,12 +387,15 @@ impl<T: 'static> TableView<T> {
     /// the host wants to keep must be carried in [`Column::width`].
     pub fn set_columns(&mut self, columns: Vec<Column<T>>, cx: &mut Context<Self>) {
         self.columns = columns;
-        let len = self.columns.len();
-        self.resized.retain(|&ix, _| ix < len);
-        self.sort = self
-            .sort
-            .filter(|&(ix, _)| ix < len)
-            .filter(|&(ix, _)| self.columns[ix].sort.is_some());
+        // Widths the host wants to keep travel in `Column::width`; leftover
+        // drag widths are keyed by the old column set and would re-attach to
+        // whatever column takes over the position if retained.
+        self.resized.clear();
+        self.sort = self.sort.filter(|&(id, _)| {
+            self.columns
+                .iter()
+                .any(|column| column.id == id && column.sort.is_some())
+        });
         cx.notify();
     }
 
@@ -401,11 +409,10 @@ impl<T: 'static> TableView<T> {
     pub fn column_layout(&self) -> Vec<(u64, f32)> {
         self.columns
             .iter()
-            .enumerate()
-            .filter_map(|(ix, column)| {
+            .filter_map(|column| {
                 let width = self
                     .resized
-                    .get(&ix)
+                    .get(&column.id)
                     .copied()
                     .or(column.width)
                     .map(|width| width.max(column.min_width))?;
@@ -428,18 +435,23 @@ impl<T: 'static> TableView<T> {
         self.selection.selected()
     }
 
-    /// The active sort, if any.
-    pub fn sort_state(&self) -> Option<(usize, SortDir)> {
+    /// The active sort, as `(column id, direction)`.
+    pub fn sort_state(&self) -> Option<(u64, SortDir)> {
         self.sort
     }
 
-    /// Select every row (`Multi` mode only).
+    /// Select every row (`Multi` mode only). Counts the rows directly — the
+    /// display order is only refreshed at render and may be stale here.
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.selection_mode, SelectionMode::Multi) {
             return;
         }
+        let len = match &self.rows {
+            Rows::Owned(rows) => rows.len(),
+            Rows::Bound(signal) => signal.read(cx).len(),
+        };
         let before = self.selection.selected();
-        self.selection.select_all(self.display_order.len());
+        self.selection.select_all(len);
         let after = self.selection.selected();
         if before != after {
             cx.emit(TableViewEvent::SelectionChanged(after));
@@ -462,8 +474,9 @@ impl<T: 'static> TableView<T> {
     /// The display order for this frame: a stable index sort when a sorted
     /// column is active, identity otherwise. Never touches the source rows.
     fn compute_order(&self, cx: &App) -> Vec<usize> {
-        let sort = self.sort.and_then(|(col, dir)| {
-            let cmp = self.columns.get(col)?.sort.clone()?;
+        let sort = self.sort.and_then(|(id, dir)| {
+            let column = self.columns.iter().find(|column| column.id == id)?;
+            let cmp = column.sort.clone()?;
             Some((dir, cmp))
         });
         match &self.rows {
@@ -474,7 +487,7 @@ impl<T: 'static> TableView<T> {
 
     fn col_width(&self, ix: usize) -> ColWidth {
         let col = &self.columns[ix];
-        if let Some(&w) = self.resized.get(&ix) {
+        if let Some(&w) = self.resized.get(&col.id) {
             ColWidth::Fixed(w.max(col.min_width))
         } else if let Some(w) = col.width {
             ColWidth::Fixed(w.max(col.min_width))
@@ -484,42 +497,23 @@ impl<T: 'static> TableView<T> {
     }
 
     fn toggle_sort(&mut self, column: usize, cx: &mut Context<Self>) {
-        self.sort = cycle_sort(self.sort, column);
+        let Some(id) = self.columns.get(column).map(|c| c.id) else {
+            return;
+        };
+        self.sort = cycle_sort(self.sort, id);
         cx.emit(TableViewEvent::Sorted(self.sort));
         cx.notify();
     }
 
-    /// Move column `from` to the position `to` currently occupies; resized
-    /// widths travel with their column.
+    /// Move column `from` to the position `to` currently occupies. Dragged
+    /// widths and the sort are keyed by column id, so nothing to remap.
     fn move_column(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
         if from == to {
             return;
         }
         let column = self.columns.remove(from);
-        let to = self
-            .columns
-            .iter()
-            .position(|_| true)
-            .map(|_| to.min(self.columns.len()))
-            .unwrap_or(self.columns.len());
         let to = if from < to { to - 1 } else { to };
-        self.columns.insert(to, column);
-        // Reindex `resized` so widths keep their columns: shift entries
-        // between `from` and `to` by one, then re-place `from` at `to`.
-        let mut remapped: HashMap<usize, f32> = HashMap::new();
-        for (&ix, &width) in &self.resized {
-            let new_ix = if ix == from {
-                to
-            } else if from < to && ix > from && ix <= to {
-                ix - 1
-            } else if to < from && ix >= to && ix < from {
-                ix + 1
-            } else {
-                ix
-            };
-            remapped.insert(new_ix, width);
-        }
-        self.resized = remapped;
+        self.columns.insert(to.min(self.columns.len()), column);
         cx.notify();
     }
 
@@ -544,7 +538,7 @@ impl<T: 'static> TableView<T> {
         };
         let min = self.columns.get(column).map(|c| c.min_width).unwrap_or(0.0);
         let width = f32::from(ev.event.position.x - bounds.left()).max(min);
-        self.resized.insert(column, width);
+        self.resized.insert(id, width);
         cx.emit(TableViewEvent::Resized(id, width));
         cx.notify();
     }
@@ -626,16 +620,15 @@ impl<T: 'static> TableView<T> {
             "up" => self.step(-1, shift, cx),
             "down" => self.step(1, shift, cx),
             "enter" => {
-                let target = self.selection.cursor().or_else(|| {
-                    let selected = self.selection.selected();
-                    (selected.len() == 1).then(|| selected[0])
-                });
-                if let Some(source) = target {
-                    cx.emit(TableViewEvent::Activated(source));
+                if self.activate_cursor(cx) {
                     cx.stop_propagation();
                 }
             }
-            "escape" => self.clear_selection(cx),
+            "escape" => {
+                if self.clear_selection(cx) {
+                    cx.stop_propagation();
+                }
+            }
             "a" if ev.keystroke.modifiers.control => {
                 self.select_all(cx);
                 cx.stop_propagation();
@@ -644,14 +637,38 @@ impl<T: 'static> TableView<T> {
         }
     }
 
-    /// Escape: only consume the key when it actually clears something, so
-    /// hosts (dialogs, ...) still see it otherwise.
-    fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        if self.selection.clear() {
+    /// Drops the whole selection (host-driven navigation etc.). Returns
+    /// whether anything was selected, so callers can skip redundant work.
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let cleared = self.selection.clear();
+        if cleared {
             cx.emit(TableViewEvent::SelectionChanged(Vec::new()));
             cx.notify();
-            cx.stop_propagation();
         }
+        cleared
+    }
+
+    /// Activates the keyboard cursor (or the sole selection), like Enter.
+    /// Returns whether a row was activated, so callers can claim the key.
+    pub fn activate_cursor(&mut self, cx: &mut Context<Self>) -> bool {
+        let target = self.selection.cursor().or_else(|| {
+            let selected = self.selection.selected();
+            (selected.len() == 1).then(|| selected[0])
+        });
+        match target {
+            Some(source) => {
+                cx.emit(TableViewEvent::Activated(source));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Keyboard facade for hosts holding focus above the table: moves the
+    /// cursor like the Up/Down keys (`extend` = shift). Consumed moves stop
+    /// propagation and scroll the cursor into view.
+    pub fn move_cursor(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
+        self.step(delta, extend, cx);
     }
 
     // --- Rendering -----------------------------------------------------------
@@ -681,28 +698,8 @@ impl<T: 'static> TableView<T> {
         for ix in 0..self.columns.len() {
             let col = &self.columns[ix];
             let sortable = col.sort.is_some();
-            let sort_dir = self.sort.filter(|&(c, _)| c == ix).map(|(_, d)| d);
+            let sort_dir = self.sort.filter(|&(id, _)| id == col.id).map(|(_, d)| d);
             let title = col.title.clone();
-
-            let grip = div()
-                .id(("guise-tableview-grip", ix))
-                .absolute()
-                .top(px(0.0))
-                .bottom(px(0.0))
-                .right(px(-3.0))
-                .w(px(6.0))
-                .cursor_col_resize()
-                .hover(move |s| s.bg(primary.alpha(0.6)))
-                .on_drag(
-                    ResizeDrag {
-                        owner,
-                        column: ix,
-                        id: col.id,
-                    },
-                    |_, _, _, cx| cx.new(|_| EmptyView),
-                )
-                // Don't let a stray click on the grip toggle the sort.
-                .on_click(|_ev, _window, cx| cx.stop_propagation());
 
             let mut cell = div()
                 .relative()
@@ -724,6 +721,34 @@ impl<T: 'static> TableView<T> {
                     }),
                 ));
             }
+
+            // Drag handle on the cell's right edge. The last column's grip
+            // sits fully inside the cell: at the window's right edge (e.g.
+            // maximized) the outer pixels belong to the OS edge zone and
+            // would never receive the press.
+            let grip = div()
+                .id(("guise-tableview-grip", ix))
+                .absolute()
+                .top(px(0.0))
+                .bottom(px(0.0))
+                .right(if ix + 1 == self.columns.len() {
+                    px(6.0)
+                } else {
+                    px(-3.0)
+                })
+                .w(px(6.0))
+                .cursor_col_resize()
+                .hover(move |s| s.bg(primary.alpha(0.6)))
+                .on_drag(
+                    ResizeDrag {
+                        owner,
+                        column: ix,
+                        id: col.id,
+                    },
+                    |_, _, _, cx| cx.new(|_| EmptyView),
+                )
+                // Don't let a stray click on the grip toggle the sort.
+                .on_click(|_ev, _window, cx| cx.stop_propagation());
             cell = cell.child(grip);
 
             let mut cell = if sortable {
@@ -740,12 +765,12 @@ impl<T: 'static> TableView<T> {
             if reorderable {
                 cell = cell
                     .on_drag(
-                        HeaderDrag { owner, column: ix },
+                        HeaderDrag { column: ix },
                         move |_, _offset, _window, cx| {
                             cx.new(|_| HeaderGhost(title.clone()))
                         },
                     )
-                    .drag_over::<HeaderDrag>(move |cell, _, _, cx| {
+                    .drag_over::<HeaderDrag>(move |cell, _, _, _| {
                         cell.bg(primary.alpha(0.15))
                     })
                     .on_drop(cx.listener(
@@ -870,7 +895,7 @@ impl<T: 'static> TableView<T> {
 
         // Right-click: adopt the row into the selection first, then let the
         // host's menu (if any) open over it.
-        if let Some(menu) = self.row_menu.clone() {
+        if self.row_menu.is_some() {
             let view = view.clone();
             tr = tr.on_mouse_down(
                 MouseButton::Right,
@@ -1021,7 +1046,7 @@ pub enum SelectionMode {
 
 /// Header-click cycling: none → asc → desc → none on the same column; a click
 /// on a different column starts fresh at ascending.
-pub fn cycle_sort(current: Option<(usize, SortDir)>, column: usize) -> Option<(usize, SortDir)> {
+pub fn cycle_sort(current: Option<(u64, SortDir)>, column: u64) -> Option<(u64, SortDir)> {
     match current {
         Some((col, SortDir::Asc)) if col == column => Some((column, SortDir::Desc)),
         Some((col, SortDir::Desc)) if col == column => None,
@@ -1320,5 +1345,60 @@ mod tests {
         assert!(!sel.retain_below(2));
         assert!(sel.clear());
         assert_eq!(sel.cursor(), None);
+    }
+
+    #[gpui::test]
+    fn set_columns_drops_dragged_widths_and_stale_sorts(cx: &mut gpui::TestAppContext) {
+        let column = |id: u64, sortable: bool| {
+            let base = Column::<()>::new(format!("col-{id}")).id(id).width(80.0);
+            if sortable {
+                base.sortable_by(|_: &(), _: &()| Ordering::Equal)
+            } else {
+                base
+            }
+        };
+        let entity = cx.new(|cx| {
+            TableView::<()>::new(cx).columns(vec![column(1, true), column(2, true)])
+        });
+        entity.update(cx, |table, cx| {
+            table.resized.insert(1, 250.0);
+            table.sort = Some((1, SortDir::Asc));
+
+            // Rebuild keeping both columns: the sort (keyed by id) survives,
+            // the dragged width does not — it must travel via `Column::width`.
+            table.set_columns(vec![column(1, true), column(2, true)], cx);
+            assert!(table.resized.is_empty(), "stale drag widths are cleared");
+            assert_eq!(table.sort, Some((1, SortDir::Asc)));
+
+            // Hide the sorted column: the sort drops instead of sliding onto
+            // whichever column takes over the position.
+            table.sort = Some((1, SortDir::Asc));
+            table.set_columns(vec![column(2, true)], cx);
+            assert_eq!(table.sort, None);
+        });
+    }
+
+    #[gpui::test]
+    fn moved_columns_keep_dragged_widths_by_id(cx: &mut gpui::TestAppContext) {
+        let entity = cx.new(|cx| {
+            TableView::<()>::new(cx).columns(vec![
+                Column::<()>::new("A").id(1).width(100.0),
+                Column::<()>::new("B").id(2).width(80.0),
+            ])
+        });
+        entity.update(cx, |table, cx| {
+            table.resized.insert(1, 250.0);
+            // Drag B (display 1) onto A (display 0).
+            table.move_column(1, 0, cx);
+            assert_eq!(
+                table.columns.iter().map(|c| c.id).collect::<Vec<_>>(),
+                vec![2, 1]
+            );
+            // Widths are keyed by id, so the move itself remaps nothing:
+            // A keeps its dragged width, B keeps its default.
+            assert_eq!(table.resized.get(&1), Some(&250.0));
+            assert_eq!(table.col_width(0), ColWidth::Fixed(80.0));
+            assert_eq!(table.col_width(1), ColWidth::Fixed(250.0));
+        });
     }
 }
