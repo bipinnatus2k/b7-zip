@@ -23,8 +23,11 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400)
 /// session mutex.
 pub(crate) struct FilesPanel {
     focus_handle: FocusHandle,
-    /// Directories the user collapsed, by archive path.
+    /// Directories the user collapsed, by archive path. Cleared when the
+    /// active archive changes — paths of different archives would collide.
     collapsed: HashSet<String>,
+    /// Entity id of the archive workspace the current snapshot came from.
+    active_id: Option<u64>,
     scroll: UniformListScrollHandle,
     tree: Option<FilesTree>,
     _poll: Option<Task<()>>,
@@ -36,6 +39,7 @@ impl FilesPanel {
             let mut this = Self {
                 focus_handle: cx.focus_handle(),
                 collapsed: HashSet::new(),
+                active_id: None,
                 scroll: UniformListScrollHandle::new(),
                 tree: None,
                 _poll: None,
@@ -57,9 +61,17 @@ impl FilesPanel {
     /// Copies the active archive's tree snapshot in, notifying only on an
     /// actual change (the timer outruns the data by design).
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        let next = globals::active_archive(cx)
-            .and_then(|weak| weak.upgrade())
+        let workspace = globals::active_archive(cx).and_then(|weak| weak.upgrade());
+        let next = workspace
+            .as_ref()
             .and_then(|workspace| workspace.read(cx).tree_snapshot(cx));
+        // Collapse state is keyed by archive-internal path, so it must not
+        // survive a switch to a different archive (or to no archive).
+        let workspace_id = workspace.as_ref().map(|w| w.entity_id().as_u64());
+        if workspace_id != self.active_id {
+            self.active_id = workspace_id;
+            self.collapsed.clear();
+        }
         if next != self.tree {
             self.tree = next;
             cx.notify();
