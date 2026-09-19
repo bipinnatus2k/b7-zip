@@ -28,46 +28,6 @@ pub struct EntryRow {
     pub method: String,
 }
 
-/// Which column the table is sorted by, and in which direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortColumn {
-    Name,
-    Size,
-    Packed,
-    Modified,
-    Crc,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDirection {
-    Ascending,
-    Descending,
-}
-
-/// A sort spec: column plus direction. Directories always sort first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Sort {
-    pub column: SortColumn,
-    pub direction: SortDirection,
-}
-
-impl Sort {
-    pub fn toggled(self, column: SortColumn) -> Self {
-        if self.column == column {
-            let direction = match self.direction {
-                SortDirection::Ascending => SortDirection::Descending,
-                SortDirection::Descending => SortDirection::Ascending,
-            };
-            Self { column, direction }
-        } else {
-            Self {
-                column,
-                direction: SortDirection::Ascending,
-            }
-        }
-    }
-}
-
 /// Logical pixel widths of the table's fixed columns. The single source for
 /// both the view (header + rows) and the responsive visibility budget.
 /// The name column is flexible; these are the rest.
@@ -144,17 +104,6 @@ impl ColumnKind {
             ColumnKind::Method => METHOD_WIDTH,
         }
     }
-
-    /// The sort this column maps to, for header clicks; `None` is not
-    /// sortable.
-    pub fn sort_column(self) -> Option<SortColumn> {
-        match self {
-            ColumnKind::Size => Some(SortColumn::Size),
-            ColumnKind::Modified => Some(SortColumn::Modified),
-            ColumnKind::Crc => Some(SortColumn::Crc),
-            _ => None,
-        }
-    }
 }
 
 /// One visible column with its user-chosen width.
@@ -176,13 +125,29 @@ pub fn default_columns() -> Vec<Column> {
         .collect()
 }
 
-/// The content's minimum width with these columns: the name column's floor,
-/// each visible column's width, and one padding allowance per column
+/// The content's minimum width with these columns: the name column's width
+/// (its dragged fixed width once the user has resized it, else its flex
+/// floor), each visible column's width, and one padding allowance per column
 /// (including Name) — the dynamic form of [`TOTAL_TABLE_WIDTH`].
-pub fn total_table_width(columns: &[Column]) -> f32 {
-    NAME_MIN_WIDTH
+pub fn total_table_width(columns: &[Column], name_width: Option<f32>) -> f32 {
+    name_width.unwrap_or(NAME_MIN_WIDTH)
         + columns.iter().map(|column| column.width).sum::<f32>()
         + CELL_PADDING * (columns.len() as f32 + 1.0)
+}
+
+/// Wraps a column-key comparator with the file-manager invariants: sorted
+/// rows keep directories ahead of files regardless of key or direction, and
+/// equal keys fall back to the natural name order. Every sortable column the
+/// table registers goes through this.
+pub fn dirs_first(
+    key: impl Fn(&EntryRow, &EntryRow) -> std::cmp::Ordering,
+) -> impl Fn(&EntryRow, &EntryRow) -> std::cmp::Ordering {
+    move |a, b| {
+        b.is_directory
+            .cmp(&a.is_directory)
+            .then_with(|| key(a, b))
+            .then_with(|| natural_cmp(&a.name, &b.name))
+    }
 }
 
 /// Rebuild the rows of `current_path` from a session's working overlay.
@@ -208,28 +173,6 @@ pub fn rows_for_path(
             .then_with(|| natural_cmp(&a.name, &b.name))
     });
     rows
-}
-
-/// Re-sorts `rows` in place by `sort`. Directories always stay ahead of
-/// files; only the key comparison follows the requested direction, with the
-/// natural name order as the tiebreak.
-pub fn apply_sort(rows: &mut [EntryRow], sort: Sort) {
-    let reverse = sort.direction == SortDirection::Descending;
-    rows.sort_by(|a, b| {
-        b.is_directory
-            .cmp(&a.is_directory)
-            .then_with(|| {
-                let ord = match sort.column {
-                    SortColumn::Name => natural_cmp(&a.name, &b.name),
-                    SortColumn::Size => a.size.cmp(&b.size),
-                    SortColumn::Packed => a.packed.cmp(&b.packed),
-                    SortColumn::Modified => a.modified.cmp(&b.modified),
-                    SortColumn::Crc => a.crc.cmp(&b.crc),
-                };
-                if reverse { ord.reverse() } else { ord }
-                    .then_with(|| natural_cmp(&a.name, &b.name))
-            })
-    });
 }
 
 /// Build a row snapshot for one VFS node.
@@ -417,7 +360,13 @@ mod tests {
 
     #[test]
     fn dynamic_total_matches_the_all_columns_constant() {
-        assert_eq!(total_table_width(&default_columns()), TOTAL_TABLE_WIDTH);
+        assert_eq!(
+            total_table_width(&default_columns(), None),
+            TOTAL_TABLE_WIDTH
+        );
+        // A dragged Name width replaces its flex floor one-for-one.
+        let dragged = total_table_width(&default_columns(), Some(NAME_MIN_WIDTH + 60.0));
+        assert_eq!(dragged, TOTAL_TABLE_WIDTH + 60.0);
     }
 
     #[test]
@@ -425,7 +374,7 @@ mod tests {
         let mut columns = default_columns();
         columns.retain(|column| column.kind != ColumnKind::Method);
         let expected = TOTAL_TABLE_WIDTH - (METHOD_WIDTH + CELL_PADDING);
-        assert!((total_table_width(&columns) - expected).abs() < f32::EPSILON);
+        assert!((total_table_width(&columns, None) - expected).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -463,38 +412,18 @@ mod tests {
     }
 
     #[test]
-    fn apply_sort_keeps_directories_first() {
+    fn dirs_first_keeps_directories_ahead_of_files() {
+        // Size ascending: the directory leads regardless of its key value,
+        // then files follow in ascending size.
+        let by_size = dirs_first(|a: &EntryRow, b: &EntryRow| a.size.cmp(&b.size));
         let mut rows = vec![
             row("b.txt", 2, false),
             row("z/", 0, true),
             row("a.txt", 10, false),
         ];
-        apply_sort(
-            &mut rows,
-            Sort {
-                column: SortColumn::Size,
-                direction: SortDirection::Descending,
-            },
-        );
+        rows.sort_by(|a, b| by_size(a, b));
         assert_eq!(rows[0].name, "z/");
-        assert_eq!(rows[1].name, "a.txt");
-        assert_eq!(rows[2].name, "b.txt");
-    }
-
-    #[test]
-    fn sort_toggle_flips_direction() {
-        let s = Sort {
-            column: SortColumn::Name,
-            direction: SortDirection::Ascending,
-        };
-        assert_eq!(
-            s.toggled(SortColumn::Name).direction,
-            SortDirection::Descending
-        );
-        assert_eq!(s.toggled(SortColumn::Size).column, SortColumn::Size);
-        assert_eq!(
-            s.toggled(SortColumn::Size).direction,
-            SortDirection::Ascending
-        );
+        assert_eq!(rows[1].name, "b.txt");
+        assert_eq!(rows[2].name, "a.txt");
     }
 }

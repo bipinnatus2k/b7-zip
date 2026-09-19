@@ -15,18 +15,17 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     Action as _, AnyElement, App, AppContext, Context, DragMoveEvent, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Render, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement,
+    ParentElement, Render, ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement,
     Styled, WeakEntity, Window, div, hsla, point, px,
 };
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::component::ActiveTheme;
 use reactive_signals::reactive::Signal;
 use session::ArchiveSession;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use ui::components::Responsive;
 use ui::data::table_view::{
-    self, Align, Column as TableColumn, SelectionMode, TableView, TableViewEvent,
+    Align, Column as TableColumn, SelectionMode, TableView, TableViewEvent,
 };
 
 gpui::actions!(
@@ -68,11 +67,16 @@ pub struct ArchiveExplorer {
     rows: Signal<Vec<EntryRow>>,
     table: Entity<TableView<EntryRow>>,
     /// Visible data columns in display order. The Name column is implicit —
-    /// always first, flexing over the remaining width.
+    /// always first; `None` while it flexes over the leftover width, or the
+    /// fixed width the user dragged its grip to.
     columns: Vec<model::Column>,
+    name_width: Option<f32>,
     /// Horizontal pan of the table viewport, shared with the custom
     /// scrollbar strip under the table.
     x_scroll: ScrollHandle,
+    /// Grab point inside the horizontal scrollbar thumb while a drag is in
+    /// flight; `None` until the first move of a drag anchors it.
+    thumb_anchor: Option<f32>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<gpui::Subscription>,
 }
@@ -87,6 +91,8 @@ impl Focusable for ArchiveExplorer {
 
 /// Column identity in the `TableView`: the Name column is 0, the data
 /// columns follow [`ColumnKind`] declaration order starting at 1.
+const NAME_COLUMN_ID: u64 = 0;
+
 fn column_id(kind: ColumnKind) -> u64 {
     match kind {
         ColumnKind::Size => 1,
@@ -111,36 +117,51 @@ fn column_kind_by_id(id: u64) -> Option<ColumnKind> {
 }
 
 /// The `TableView` column definitions for a visible-column state.
-fn build_table_columns(columns: &[model::Column]) -> Vec<TableColumn<EntryRow>> {
-    let mut out = vec![TableColumn::<EntryRow>::new("Name")
-        .id(0)
+fn build_table_columns(
+    columns: &[model::Column],
+    name_width: Option<f32>,
+) -> Vec<TableColumn<EntryRow>> {
+    // The Name column always sorts first and starts out flexing over the
+    // leftover width; dragging its grip fixes it at the chosen width (the
+    // table's `resized` map mirrors this on its side), and the width feeds
+    // `total_table_width` so the scroll math stays honest.
+    let mut name = TableColumn::<EntryRow>::new("Name")
+        .id(NAME_COLUMN_ID)
         .flex(1.0)
         .min_width(model::NAME_MIN_WIDTH)
-        .text(|row: &EntryRow| row.name.clone().into())
-        .sortable_by(|a: &EntryRow, b: &EntryRow| natural_cmp(&a.name, &b.name))];
+        .text(|row: &EntryRow| row.name.clone().into());
+    if let Some(width) = name_width {
+        name = name.width(width);
+    }
+    let mut out = vec![name.sortable_by(model::dirs_first(
+        |a: &EntryRow, b: &EntryRow| natural_cmp(&a.name, &b.name),
+    ))];
     for state in columns {
         let kind = state.kind;
         let base = TableColumn::<EntryRow>::new(kind.title())
             .id(column_id(kind))
             .width(state.width)
             .min_width(model::COLUMN_MIN_WIDTH);
+        // Every comparator goes through `dirs_first`, so sorting never
+        // mixes directories into the files (the model's own order keeps
+        // them separated when no sort is active).
         let column = match kind {
             ColumnKind::Size => base
                 .align(Align::End)
                 .text(|row| format_size(row.size).into())
-                .sortable_by(|a, b| a.size.cmp(&b.size)),
+                .sortable_by(model::dirs_first(|a, b| a.size.cmp(&b.size))),
             ColumnKind::Packed => base
                 .align(Align::End)
                 .text(|row| format_size(row.packed).into())
-                .sortable_by(|a, b| a.packed.cmp(&b.packed)),
+                .sortable_by(model::dirs_first(|a, b| a.packed.cmp(&b.packed))),
             ColumnKind::Modified => base
                 .text(|row| row.modified.clone().into())
-                .sortable_by(|a, b| a.modified.cmp(&b.modified)),
+                .sortable_by(model::dirs_first(|a, b| a.modified.cmp(&b.modified))),
             ColumnKind::Attributes => base.text(|row| attr_string(row).into()),
             ColumnKind::Crc => base
                 .align(Align::End)
                 .text(|row| crc_string(row).into())
-                .sortable_by(|a, b| a.crc.cmp(&b.crc)),
+                .sortable_by(model::dirs_first(|a, b| a.crc.cmp(&b.crc))),
             ColumnKind::Method => base.text(|row| row.method.clone().into()),
         };
         out.push(column);
@@ -158,7 +179,7 @@ impl ArchiveExplorer {
             let initial = columns.clone();
             cx.new(|cx| {
                 TableView::new(cx)
-                    .columns(build_table_columns(&initial))
+                    .columns(build_table_columns(&initial, None))
                     .bind_rows(&rows, cx)
                     .selection_mode(SelectionMode::Multi)
                     .highlight_on_hover(true)
@@ -199,7 +220,9 @@ impl ArchiveExplorer {
             rows,
             table,
             columns,
+            name_width: None,
             x_scroll,
+            thumb_anchor: None,
             focus_handle: cx.focus_handle(),
             _subscriptions: vec![subscription],
         }
@@ -208,6 +231,7 @@ impl ArchiveExplorer {
     pub fn set_session(&mut self, session: Arc<Mutex<ArchiveSession>>, cx: &mut Context<Self>) {
         self.session = Some(session);
         self.current_path.clear();
+        self.clear_table_selection(cx);
         self.refresh(cx);
     }
 
@@ -225,6 +249,7 @@ impl ArchiveExplorer {
         };
         if exists {
             self.current_path = path.to_string();
+            self.clear_table_selection(cx);
             self.refresh(cx);
         }
     }
@@ -238,6 +263,7 @@ impl ArchiveExplorer {
             Some(idx) => trimmed[..idx].to_string(),
             None => String::new(),
         };
+        self.clear_table_selection(cx);
         self.refresh(cx);
     }
 
@@ -304,6 +330,15 @@ impl ArchiveExplorer {
     /// Selects every visible row (the Select-all command).
     pub fn select_all_rows(&mut self, cx: &mut Context<Self>) {
         self.table.update(cx, |table, cx| table.select_all(cx));
+    }
+
+    /// Drops the table's selection. Navigation and session changes replace
+    /// the row set, so source indices would otherwise keep pointing at
+    /// whatever rows now occupy the same positions.
+    fn clear_table_selection(&mut self, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            table.clear_selection(cx);
+        });
     }
 
     /// Copies dropped external files into the current directory as unstaged
@@ -377,16 +412,21 @@ impl ArchiveExplorer {
             }
             TableViewEvent::Activated(source) => cx.emit(ExplorerEvent::Activated(*source)),
             TableViewEvent::Resized(id, width) => {
-                let Some(kind) = column_kind_by_id(*id) else {
-                    return;
-                };
-                if let Some(column) = self
-                    .columns
-                    .iter_mut()
-                    .find(|column| column.kind == kind)
-                {
-                    column.width = *width;
+                // The horizontal scroll container and the scrollbar strip are
+                // built from this view's render, which snapshots the columns'
+                // total width. Every resize — including the Name column's —
+                // must refresh it, or the strip hides while the content
+                // overflows and its drag range stops short of the tail.
+                if *id == NAME_COLUMN_ID {
+                    self.name_width = Some(*width);
+                } else if let Some(kind) = column_kind_by_id(*id) {
+                    if let Some(column) =
+                        self.columns.iter_mut().find(|column| column.kind == kind)
+                    {
+                        column.width = *width;
+                    }
                 }
+                cx.notify();
             }
             TableViewEvent::ColumnsReordered => {
                 // Adopt the table's display order (and carried widths) so a
@@ -402,6 +442,7 @@ impl ArchiveExplorer {
                             })
                     })
                     .collect();
+                cx.notify();
             }
             TableViewEvent::Sorted(_) => {}
         }
@@ -418,7 +459,7 @@ impl ArchiveExplorer {
                 width: kind.default_width(),
             });
         }
-        let defs = build_table_columns(&self.columns);
+        let defs = build_table_columns(&self.columns, self.name_width);
         self.table.update(cx, |table, cx| table.set_columns(defs, cx));
         cx.notify();
     }
@@ -484,6 +525,22 @@ impl ArchiveExplorer {
             "backspace" => self.navigate_up(cx),
             "delete" => cx.emit(ExplorerEvent::Command(ExplorerCommand::Delete)),
             "f2" => cx.emit(ExplorerEvent::Command(ExplorerCommand::Rename)),
+            // The table owns the cursor. These forward to it for the case
+            // where focus sits on this view rather than on the table itself
+            // (e.g. right after tab activation); when the table is focused
+            // it consumes the keys first and stops propagation.
+            "up" => self
+                .table
+                .update(cx, |table, cx| table.move_cursor(-1, modifiers.shift, cx)),
+            "down" => self
+                .table
+                .update(cx, |table, cx| table.move_cursor(1, modifiers.shift, cx)),
+            "enter" => {
+                let activated = self.table.update(cx, |table, cx| table.activate_cursor(cx));
+                if !activated {
+                    return;
+                }
+            }
             "a" if modifiers.control => self.select_all_rows(cx),
             _ => return,
         }
@@ -493,12 +550,13 @@ impl ArchiveExplorer {
 
 impl Render for ArchiveExplorer {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (fg, muted, border) = {
+        let (fg, muted) = {
             let theme = cx.theme();
-            (theme.foreground, theme.muted_foreground, theme.border)
+            (theme.foreground, theme.muted_foreground)
         };
         let columns = self.columns.clone();
-        let total = total_table_width(&columns);
+        let name_width = self.name_width;
+        let total = total_table_width(&columns, name_width);
         let data_view = self.table.clone();
         let x_scroll = self.x_scroll.clone();
         let weak = cx.weak_entity();
@@ -532,8 +590,10 @@ impl Render for ArchiveExplorer {
                     if !event.modifiers.shift {
                         return;
                     }
-                    let max = x_scroll.max_offset();
-                    if max.x >= px(0.0) {
+                    // gpui: `max_offset` is the positive scrollable range and
+                    // the offset lives in [-max, 0].
+                    let max = x_scroll.max_offset().x;
+                    if max <= px(0.0) {
                         return; // the table fits; nothing to pan
                     }
                     let delta = event.delta.pixel_delta(window.line_height());
@@ -541,7 +601,7 @@ impl Render for ArchiveExplorer {
                         return;
                     }
                     let cur = x_scroll.offset();
-                    let wanted = (cur.x + delta.x + delta.y).clamp(max.x, px(0.0));
+                    let wanted = (cur.x + delta.x + delta.y).clamp(-max, px(0.0));
                     x_scroll.set_offset(point(wanted, cur.y));
                     cx.stop_propagation();
                     let _ = weak.update(cx, |_, cx| cx.notify());
@@ -651,9 +711,9 @@ impl Render for ThumbGhost {
 }
 
 /// The thin horizontal scrollbar under the table: shown only when the
-/// container is narrower than the columns' total width. Dragging the thumb
-/// maps the pointer's ratio along the track to the scroll offset; touchpad
-/// horizontal gestures work on the scroller directly.
+/// container is narrower than the columns' total width. The thumb drags
+/// relatively — the grab point inside it is preserved, like a native
+/// scrollbar; touchpad horizontal gestures work on the scroller directly.
 fn x_scrollbar_strip(
     handle: &ScrollHandle,
     viewport: f32,
@@ -691,14 +751,33 @@ fn x_scrollbar_strip(
                 if vw <= 0.0 {
                     return;
                 }
-                let ratio = ((f32::from(ev.event.position.x)
-                    - f32::from(ev.bounds.origin.x))
-                    / vw)
-                    .clamp(0.0, 1.0);
-                let offset = px(-(ratio * (total - vw)));
+                let pointer = f32::from(ev.event.position.x) - f32::from(ev.bounds.origin.x);
+                let thumb_w = (viewport * viewport / total).max(24.0).min(viewport);
+                let track = vw - thumb_w;
                 let _ = weak.update(cx, |this, cx| {
-                    this.x_scroll.set_offset(point(offset, px(0.0)));
-                    cx.notify();
+                    // `max_offset` is the positive scrollable range.
+                    let max = f32::from(this.x_scroll.max_offset().x);
+                    if max <= 0.0 {
+                        return;
+                    }
+                    match this.thumb_anchor {
+                        // First move of a drag: the pointer is still where the
+                        // press landed, so it anchors the grab point inside the
+                        // thumb while the thumb stays put.
+                        None => {
+                            let offset = f32::from(this.x_scroll.offset().x);
+                            let frac = (-offset / max).clamp(0.0, 1.0);
+                            this.thumb_anchor = Some((pointer - frac * track).clamp(0.0, thumb_w));
+                        }
+                        // Later moves: the thumb tracks the pointer minus the
+                        // preserved grab point.
+                        Some(anchor) if track > 0.0 => {
+                            let frac = ((pointer - anchor) / track).clamp(0.0, 1.0);
+                            this.x_scroll.set_offset(point(px(-frac * max), px(0.0)));
+                            cx.notify();
+                        }
+                        Some(_) => {}
+                    }
                 });
             }
         })
@@ -713,7 +792,14 @@ fn x_scrollbar_strip(
                 .rounded_full()
                 .bg(hsla(muted.h, muted.s, muted.l, 0.5))
                 .cursor_pointer()
-                .on_drag(XThumbDrag, |_, _, _, cx| cx.new(|_| ThumbGhost)),
+                .on_drag(XThumbDrag, {
+                    let weak = weak.clone();
+                    move |_, _, _, app| {
+                        // A new drag re-anchors the grab point on first move.
+                        let _ = weak.update(app, |this, _| this.thumb_anchor = None);
+                        app.new(|_| ThumbGhost)
+                    }
+                }),
         )
         .into_any_element()
 }
