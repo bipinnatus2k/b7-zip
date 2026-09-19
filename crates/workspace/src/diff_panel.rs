@@ -3,12 +3,14 @@
 //! snapshot — entries and content are computed when the panel is opened, so
 //! it stays valid even if the source workspace changes underneath.
 
-use compare::{compare_bytes, BlobInfo, ContentDiff, DiffEntry, DiffKind, DiffLine, DiffReport, LineKind};
+use compare::{
+    BlobInfo, ContentDiff, DiffEntry, DiffKind, DiffLine, DiffReport, LineKind, compare_bytes,
+};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, hsla, px, uniform_list, App, AppContext, Context, Div, EventEmitter, FocusHandle,
-    Focusable, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Stateful, StatefulInteractiveElement, Styled, UniformListScrollHandle, Window,
+    App, AppContext, Context, Div, EventEmitter, FocusHandle, Focusable, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Stateful, StatefulInteractiveElement, Styled,
+    UniformListScrollHandle, Window, div, hsla, px, uniform_list,
 };
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::dock::{BasePanel, Panel};
@@ -122,7 +124,9 @@ impl DiffPanel {
                 .await;
             // Bail out if the selection moved on while we were loading.
             let still_current = this
-                .read_with(cx, |this, _| this.selected.map(|ix| this.entries[ix].path.clone()))
+                .read_with(cx, |this, _| {
+                    this.selected.map(|ix| this.entries[ix].path.clone())
+                })
                 .ok()
                 .flatten()
                 .is_some_and(|selected| selected == entry.path);
@@ -164,7 +168,6 @@ fn build_content_view(
 
 impl Render for DiffPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let (fg, muted, border, secondary, primary, success, danger) = {
             let t = cx.theme();
             (
@@ -216,11 +219,14 @@ impl Render for DiffPanel {
         );
 
         let content: Div = match &self.content {
-            None => placeholder(if selected.is_some() {
-                "Loading contents…"
-            } else {
-                "Select an entry to compare"
-            }, muted),
+            None => placeholder(
+                if selected.is_some() {
+                    "Loading contents…"
+                } else {
+                    "Select an entry to compare"
+                },
+                muted,
+            ),
             Some(ContentView::Unavailable(reason)) => placeholder(reason, muted),
             Some(ContentView::Binary { base, working }) => {
                 binary_card(base, working, muted, border, success, danger)
