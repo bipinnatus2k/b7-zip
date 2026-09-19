@@ -160,6 +160,11 @@ static STARTUP_TIME: OnceLock<Instant> = OnceLock::new();
 fn main() {
     STARTUP_TIME.get_or_init(|| Instant::now());
 
+    // Do this before anything can print: a stderr write to a closed pipe
+    // panics and kills the app (see the function docs).
+    #[cfg(target_os = "windows")]
+    init::environment::redirect_pipe_std_streams_to_nul();
+
     // If this process was re-executed as a Linux sandbox helper, run that mode
     // without returning. Must run before argument parsing: the wrapped command's
     // args are appended verbatim and would otherwise be misinterpreted as Zed's
